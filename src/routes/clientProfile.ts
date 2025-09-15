@@ -14,17 +14,19 @@ import { authenticateToken } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import { RedisAdapter } from './clientProfile/redisAdapter';
 
-export function createClientProfileRoutes(db: typeof import('../services/database').DatabaseService, redisService: typeof import('../services/redis').RedisService): Router {
+import { Pool } from 'pg';
+
+export function createClientProfileRoutes(db: Pool, redisService: typeof import('../services/redis').RedisService): Router {
     const router = Router();
 
     // Initialize Redis adapter
     const redisAdapter = new RedisAdapter();
 
-    // Initialize services - pass the DatabaseService directly since services need to be updated to use it
+    // Initialize services
     const crmSyncService = CrmSyncService.getInstance();
-    const clientProfileService = new ClientProfileService(db as any, redisAdapter as any, crmSyncService);
-    const relationshipVisualizationService = new RelationshipVisualizationService(db as any, redisAdapter as any);
-    const crmDataFetchingService = new CrmDataFetchingService(db as any, redisAdapter as any, crmSyncService);
+    const clientProfileService = new ClientProfileService(db, redisAdapter as any, crmSyncService);
+    const relationshipVisualizationService = new RelationshipVisualizationService(db, redisAdapter as any);
+    const crmDataFetchingService = new CrmDataFetchingService(db, redisAdapter as any, crmSyncService);
 
     // Apply authentication to all routes
     router.use(authenticateToken);

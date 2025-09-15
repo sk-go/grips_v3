@@ -49,20 +49,32 @@ export interface SentimentTrendPoint {
   averageResponseTime: number;
 }
 
-export interface SentimentTrendData {
+export interface RelationshipInsight {
+  id: string;
   clientId: string;
-  timeframe: '7d' | '30d' | '90d' | '1y';
-  dataPoints: SentimentTrendPoint[];
-  overallTrend: 'improving' | 'stable' | 'declining';
-  trendStrength: number; // 0-1 scale
+  type: 'sentiment_change' | 'response_delay' | 'communication_gap' | 'positive_trend';
+  title: string;
+  description: string;
+  severity: 'low' | 'medium' | 'high';
+  actionable: boolean;
+  suggestedActions: string[];
+  createdAt: Date;
 }
 
 export class RelationshipInsightsService {
+  private db: Pool;
+  private redis: RedisClientType;
+  private nlpService: NLPProcessingService;
+
   constructor(
-    private db: Pool,
-    private redis: RedisClientType,
-    private nlpService: NLPProcessingService
-  ) {}
+    db: Pool,
+    redis: RedisClientType,
+    nlpService: NLPProcessingService
+  ) {
+    this.db = db;
+    this.redis = redis;
+    this.nlpService = nlpService;
+  }
 
   /**
    * Analyze sentiment of communication using VADER-like approach
@@ -75,203 +87,94 @@ export class RelationshipInsightsService {
         language: 'en'
       });
 
-      const sentiment = nlpResult.sentiment;
+      // Convert NLP result to our sentiment format
+      const score = nlpResult.sentiment?.score || 0;
+      const magnitude = Math.abs(score);
       
-      // Enhanced VADER-like sentiment analysis
-      const enhancedResult = await this.enhancedSentimentAnalysis(text);
-      
-      // Combine results with VADER threshold
-      const finalScore = (sentiment.score + enhancedResult.score) / 2;
-      const isPositive = finalScore > 0.5; // VADER >0.5 positive threshold
-      
+      let label: SentimentAnalysisResult['label'];
+      if (score <= -0.6) label = 'very_negative';
+      else if (score <= -0.2) label = 'negative';
+      else if (score >= 0.6) label = 'very_positive';
+      else if (score >= 0.2) label = 'positive';
+      else label = 'neutral';
+
       return {
-        score: finalScore,
-        magnitude: Math.max(sentiment.magnitude, enhancedResult.magnitude),
-        label: this.getSentimentLabel(finalScore),
-        confidence: Math.max(sentiment.confidence, enhancedResult.confidence),
-        isPositive
+        score,
+        magnitude,
+        label,
+        confidence: nlpResult.sentiment?.confidence || 0.5,
+        isPositive: score > 0.05
       };
 
     } catch (error) {
-      logger.error('Sentiment analysis failed:', error);
-      return {
-        score: 0,
-        magnitude: 0,
-        label: 'neutral',
-        confidence: 0,
-        isPositive: false
-      };
+      logger.error('Error analyzing sentiment:', error);
+      throw error;
     }
   }
 
   /**
-   * Enhanced VADER-like sentiment analysis with insurance domain specifics
-   */
-  private async enhancedSentimentAnalysis(text: string): Promise<Omit<SentimentAnalysisResult, 'isPositive'>> {
-    const lowerText = text.toLowerCase();
-    
-    // Insurance-specific sentiment lexicon
-    const sentimentLexicon: Record<string, number> = {
-      // Very positive (2.0)
-      'excellent': 2.0, 'outstanding': 2.0, 'amazing': 2.0, 'fantastic': 2.0,
-      'thrilled': 2.0, 'delighted': 2.0, 'impressed': 2.0,
-      
-      // Positive (1.0)
-      'good': 1.0, 'great': 1.0, 'satisfied': 1.0, 'happy': 1.0, 'pleased': 1.0,
-      'helpful': 1.0, 'professional': 1.0, 'responsive': 1.0, 'reliable': 1.0,
-      'trustworthy': 1.0, 'recommend': 1.0, 'appreciate': 1.0, 'thank': 1.0,
-      
-      // Slightly positive (0.5)
-      'okay': 0.5, 'fine': 0.5, 'decent': 0.5, 'reasonable': 0.5,
-      
-      // Slightly negative (-0.5)
-      'slow': -0.5, 'delayed': -0.5, 'confused': -0.5, 'unclear': -0.5,
-      
-      // Negative (-1.0)
-      'bad': -1.0, 'poor': -1.0, 'disappointed': -1.0, 'frustrated': -1.0,
-      'unhappy': -1.0, 'dissatisfied': -1.0, 'problem': -1.0, 'issue': -1.0,
-      'complaint': -1.0, 'difficult': -1.0, 'unresponsive': -1.0,
-      
-      // Very negative (-2.0)
-      'terrible': -2.0, 'awful': -2.0, 'horrible': -2.0, 'disgusted': -2.0,
-      'furious': -2.0, 'outraged': -2.0, 'unacceptable': -2.0, 'scam': -2.0
-    };
-
-    // Intensifiers
-    const intensifiers: Record<string, number> = {
-      'very': 1.3, 'really': 1.3, 'extremely': 1.5, 'incredibly': 1.5,
-      'absolutely': 1.4, 'completely': 1.4, 'totally': 1.4,
-      'quite': 1.1, 'rather': 1.1, 'somewhat': 0.8, 'slightly': 0.7
-    };
-
-    // Negation words
-    const negations = ['not', 'no', 'never', 'none', 'nobody', 'nothing', 'neither', 'nowhere', 'hardly', 'scarcely', 'barely'];
-
-    const words = lowerText.split(/\s+/);
-    let sentimentScore = 0;
-    let sentimentCount = 0;
-    
-    for (let i = 0; i < words.length; i++) {
-      const word = words[i].replace(/[^\w]/g, ''); // Remove punctuation
-      
-      if (sentimentLexicon[word]) {
-        let wordScore = sentimentLexicon[word];
-        
-        // Check for intensifiers in the previous 2 words
-        for (let j = Math.max(0, i - 2); j < i; j++) {
-          const prevWord = words[j].replace(/[^\w]/g, '');
-          if (intensifiers[prevWord]) {
-            wordScore *= intensifiers[prevWord];
-          }
-        }
-        
-        // Check for negations in the previous 3 words
-        let isNegated = false;
-        for (let j = Math.max(0, i - 3); j < i; j++) {
-          const prevWord = words[j].replace(/[^\w]/g, '');
-          if (negations.includes(prevWord)) {
-            isNegated = true;
-            break;
-          }
-        }
-        
-        if (isNegated) {
-          wordScore *= -0.8; // Flip and reduce intensity
-        }
-        
-        sentimentScore += wordScore;
-        sentimentCount++;
-      }
-    }
-
-    // Normalize score
-    const normalizedScore = sentimentCount > 0 ? sentimentScore / sentimentCount : 0;
-    
-    // Calculate magnitude (intensity)
-    const magnitude = Math.min(1, Math.abs(normalizedScore) / 2);
-    
-    // Calculate confidence based on sentiment word density
-    const confidence = Math.min(0.95, sentimentCount / words.length * 5);
-    
-    // Normalize to -1 to 1 scale
-    const finalScore = Math.max(-1, Math.min(1, normalizedScore / 2));
-
-    return {
-      score: finalScore,
-      magnitude,
-      label: this.getSentimentLabel(finalScore),
-      confidence
-    };
-  }
-
-  /**
-   * Get sentiment label from score
-   */
-  private getSentimentLabel(score: number): SentimentAnalysisResult['label'] {
-    if (score > 0.6) return 'very_positive';
-    if (score > 0.2) return 'positive';
-    if (score < -0.6) return 'very_negative';
-    if (score < -0.2) return 'negative';
-    return 'neutral';
-  }
-
-  /**
-   * Calculate relationship health score (0-100 scale)
+   * Calculate relationship health score based on multiple factors
    */
   async calculateRelationshipHealth(clientId: string): Promise<RelationshipHealthScore> {
     try {
       const cacheKey = `relationship_health:${clientId}`;
       
-      // Check cache (valid for 1 hour)
+      // Check cache first (valid for 1 hour)
       const cached = await this.redis.get(cacheKey);
       if (cached) {
         return JSON.parse(cached);
       }
 
-      // Get client data
-      const client = await this.getClientData(clientId);
-      if (!client) {
-        throw new Error(`Client not found: ${clientId}`);
+      // Get recent communications (last 90 days)
+      const recentComms = await this.getRecentCommunications(clientId, 90);
+      
+      if (recentComms.length === 0) {
+        const defaultScore: RelationshipHealthScore = {
+          score: 50,
+          factors: {
+            sentimentTrend: 25,
+            interactionFrequency: 12,
+            responseTime: 10,
+            recentActivity: 7,
+            communicationQuality: 5
+          },
+          trend: 'stable',
+          lastCalculated: new Date()
+        };
+        
+        await this.redis.setex(cacheKey, 3600, JSON.stringify(defaultScore));
+        return defaultScore;
       }
 
-      // Get recent communications (last 90 days)
-      const communications = await this.getRecentCommunications(clientId, 90);
-      
       // Calculate individual factors
-      const factors = {
-        sentimentTrend: await this.calculateSentimentTrendScore(communications),
-        interactionFrequency: this.calculateInteractionFrequencyScore(communications),
-        responseTime: this.calculateResponseTimeScore(communications),
-        recentActivity: this.calculateRecentActivityScore(communications),
-        communicationQuality: await this.calculateCommunicationQualityScore(communications)
-      };
+      const sentimentTrend = await this.calculateSentimentTrendScore(recentComms);
+      const interactionFrequency = this.calculateInteractionFrequencyScore(recentComms);
+      const responseTime = await this.calculateResponseTimeScore(clientId, recentComms);
+      const recentActivity = this.calculateRecentActivityScore(recentComms);
+      const communicationQuality = await this.calculateCommunicationQualityScore(recentComms);
 
-      // Calculate total score
-      const totalScore = Math.round(
-        factors.sentimentTrend + 
-        factors.interactionFrequency + 
-        factors.responseTime + 
-        factors.recentActivity + 
-        factors.communicationQuality
-      );
-
-      // Determine trend
-      const trend = await this.determineHealthTrend(clientId, totalScore);
+      const totalScore = sentimentTrend + interactionFrequency + responseTime + recentActivity + communicationQuality;
+      
+      // Determine trend based on recent vs older communications
+      const trend = await this.determineTrend(clientId, recentComms);
 
       const healthScore: RelationshipHealthScore = {
-        score: Math.max(0, Math.min(100, totalScore)),
-        factors,
+        score: Math.min(100, Math.max(0, totalScore)),
+        factors: {
+          sentimentTrend,
+          interactionFrequency,
+          responseTime,
+          recentActivity,
+          communicationQuality
+        },
         trend,
         lastCalculated: new Date()
       };
 
       // Cache for 1 hour
-      await this.redis.setEx(cacheKey, 3600, JSON.stringify(healthScore));
-
-      // Update client record
-      await this.updateClientHealthScore(clientId, healthScore.score);
-
-      logger.info(`Calculated relationship health score for client ${clientId}: ${healthScore.score}`);
+      await this.redis.setex(cacheKey, 3600, JSON.stringify(healthScore));
+      
+      logger.info(`Calculated relationship health for client ${clientId}: ${healthScore.score}`);
       return healthScore;
 
     } catch (error) {
@@ -281,224 +184,57 @@ export class RelationshipInsightsService {
   }
 
   /**
-   * Calculate sentiment trend score (0-30 points)
-   */
-  private async calculateSentimentTrendScore(communications: Communication[]): Promise<number> {
-    if (communications.length === 0) return 15; // Neutral baseline
-
-    let totalSentiment = 0;
-    let sentimentCount = 0;
-
-    for (const comm of communications) {
-      if (comm.sentiment !== undefined) {
-        totalSentiment += comm.sentiment;
-        sentimentCount++;
-      }
-    }
-
-    if (sentimentCount === 0) return 15;
-
-    const averageSentiment = totalSentiment / sentimentCount;
-    
-    // Convert -1 to 1 scale to 0-30 points
-    return Math.round(15 + (averageSentiment * 15));
-  }
-
-  /**
-   * Calculate interaction frequency score (0-25 points)
-   */
-  private calculateInteractionFrequencyScore(communications: Communication[]): number {
-    const daysInPeriod = 90;
-    const interactionsPerDay = communications.length / daysInPeriod;
-    
-    // Optimal frequency: 1-2 interactions per week (0.14-0.28 per day)
-    if (interactionsPerDay >= 0.14 && interactionsPerDay <= 0.28) {
-      return 25; // Perfect frequency
-    } else if (interactionsPerDay > 0.28) {
-      // Too frequent - diminishing returns
-      return Math.max(15, 25 - Math.round((interactionsPerDay - 0.28) * 50));
-    } else {
-      // Too infrequent
-      return Math.round(interactionsPerDay * 178); // Scale to 25 max
-    }
-  }
-
-  /**
-   * Calculate response time score (0-20 points)
-   */
-  private calculateResponseTimeScore(communications: Communication[]): number {
-    const responseTimes: number[] = [];
-    
-    // Calculate response times between inbound and outbound messages
-    for (let i = 0; i < communications.length - 1; i++) {
-      const current = communications[i];
-      const next = communications[i + 1];
-      
-      if (current.direction === 'inbound' && next.direction === 'outbound') {
-        const responseTime = (next.timestamp.getTime() - current.timestamp.getTime()) / (1000 * 60 * 60); // hours
-        responseTimes.push(responseTime);
-      }
-    }
-
-    if (responseTimes.length === 0) return 10; // Neutral baseline
-
-    const averageResponseTime = responseTimes.reduce((sum, time) => sum + time, 0) / responseTimes.length;
-    
-    // Scoring: < 2 hours = 20 points, < 24 hours = 15 points, < 48 hours = 10 points, > 48 hours = 5 points
-    if (averageResponseTime < 2) return 20;
-    if (averageResponseTime < 24) return 15;
-    if (averageResponseTime < 48) return 10;
-    return 5;
-  }
-
-  /**
-   * Calculate recent activity score (0-15 points)
-   */
-  private calculateRecentActivityScore(communications: Communication[]): number {
-    const now = new Date();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-    const recentComms = communications.filter(c => c.timestamp >= sevenDaysAgo);
-    const monthlyComms = communications.filter(c => c.timestamp >= thirtyDaysAgo);
-
-    if (recentComms.length > 0) return 15; // Recent activity
-    if (monthlyComms.length > 0) return 10; // Some recent activity
-    return 5; // No recent activity
-  }
-
-  /**
-   * Calculate communication quality score (0-10 points)
-   */
-  private async calculateCommunicationQualityScore(communications: Communication[]): Promise<number> {
-    if (communications.length === 0) return 5;
-
-    let qualityScore = 0;
-    let scoredComms = 0;
-
-    for (const comm of communications) {
-      // Length indicates engagement
-      const wordCount = comm.content.split(/\s+/).length;
-      let commScore = 0;
-
-      if (wordCount > 50) commScore += 3; // Detailed communication
-      else if (wordCount > 20) commScore += 2; // Moderate detail
-      else commScore += 1; // Brief
-
-      // Check for questions (indicates engagement)
-      if (comm.content.includes('?')) commScore += 1;
-
-      // Check for personal touches
-      const personalWords = ['thank', 'appreciate', 'family', 'birthday', 'vacation', 'holiday'];
-      if (personalWords.some(word => comm.content.toLowerCase().includes(word))) {
-        commScore += 1;
-      }
-
-      qualityScore += Math.min(5, commScore);
-      scoredComms++;
-    }
-
-    return Math.round((qualityScore / scoredComms) * 2); // Scale to 0-10
-  }
-
-  /**
-   * Determine health trend by comparing with historical scores
-   */
-  private async determineHealthTrend(clientId: string, currentScore: number): Promise<'improving' | 'stable' | 'declining'> {
-    try {
-      // Get historical scores from the last 3 months
-      const query = `
-        SELECT relationship_score, updated_at
-        FROM clients 
-        WHERE id = $1 AND updated_at >= NOW() - INTERVAL '90 days'
-        ORDER BY updated_at DESC
-        LIMIT 10
-      `;
-
-      const result = await this.db.query(query, [clientId]);
-      
-      if (result.rows.length < 2) return 'stable';
-
-      const scores = result.rows.map(row => row.relationship_score);
-      const recentAverage = scores.slice(0, 3).reduce((sum, score) => sum + score, 0) / Math.min(3, scores.length);
-      const olderAverage = scores.slice(3).reduce((sum, score) => sum + score, 0) / Math.max(1, scores.length - 3);
-
-      const difference = recentAverage - olderAverage;
-
-      if (difference > 5) return 'improving';
-      if (difference < -5) return 'declining';
-      return 'stable';
-
-    } catch (error) {
-      logger.error('Error determining health trend:', error);
-      return 'stable';
-    }
-  }
-
-  /**
-   * Generate conversation summary using AI
+   * Generate conversation summary using NLP
    */
   async generateConversationSummary(
-    clientId: string, 
-    communications: Communication[]
+    clientId: string,
+    communicationIds: string[]
   ): Promise<ConversationSummary> {
     try {
+      // Get communications
+      const communications = await this.getCommunicationsByIds(communicationIds);
+      
       if (communications.length === 0) {
-        throw new Error('No communications provided for summary');
+        throw new Error('No communications found for summary generation');
       }
 
-      // Combine communication content
-      const conversationText = communications
-        .map(c => `[${c.direction.toUpperCase()}] ${c.content}`)
+      // Combine all communication content
+      const combinedText = communications
+        .map(comm => `${comm.subject || ''} ${comm.content}`)
         .join('\n\n');
 
-      // Generate summary using NLP service
-      const summaryPrompt = `
-        Summarize the following conversation between an insurance agent and client. 
-        Focus on key points, decisions made, and any action items mentioned.
-        Keep the summary concise but comprehensive.
-        
-        Conversation:
-        ${conversationText}
-      `;
-
+      // Use NLP service to generate summary
       const nlpResult = await this.nlpService.processText({
-        text: summaryPrompt,
+        text: combinedText,
         language: 'en'
       });
 
-      // Extract key topics from entities
-      const keyTopics = nlpResult.entities
-        .filter(e => ['person', 'policy_number', 'money', 'date'].includes(e.type))
-        .map(e => e.value)
-        .slice(0, 10); // Limit to top 10
+      // Extract key topics and action items
+      const keyTopics = nlpResult.entities?.map(entity => entity.text) || [];
+      const actionItems = nlpResult.tasks?.map(task => task.description) || [];
 
-      // Extract action items from tasks
-      const actionItems = nlpResult.tasks
-        .map(t => t.description)
-        .slice(0, 5); // Limit to top 5
-
-      // Generate a simple summary (in a real implementation, this would use a more sophisticated AI model)
-      const summary = this.generateSimpleSummary(communications);
-
-      // Calculate overall sentiment
+      // Calculate average sentiment
       const sentiments = await Promise.all(
-        communications.map(c => this.analyzeSentiment(c.content))
+        communications.map(comm => this.analyzeSentiment(comm.content))
       );
-      const averageSentiment = sentiments.reduce((sum, s) => sum + s.score, 0) / sentiments.length;
+      const avgSentiment = sentiments.reduce((sum, s) => sum + s.score, 0) / sentiments.length;
 
-      // Save to database
-      const summaryRecord = await this.saveConversationSummary({
+      const summary: ConversationSummary = {
+        id: `summary_${Date.now()}`,
         clientId,
-        communicationId: communications[0]?.id,
-        summary,
-        keyTopics,
-        actionItems,
-        sentimentScore: averageSentiment
-      });
+        communicationId: communicationIds.length === 1 ? communicationIds[0] : undefined,
+        summary: nlpResult.summary || 'Summary generation failed',
+        keyTopics: keyTopics.slice(0, 10), // Limit to top 10
+        actionItems: actionItems.slice(0, 5), // Limit to top 5
+        sentimentScore: avgSentiment,
+        createdAt: new Date()
+      };
+
+      // Store summary in database
+      await this.storeSummary(summary);
 
       logger.info(`Generated conversation summary for client ${clientId}`);
-      return summaryRecord;
+      return summary;
 
     } catch (error) {
       logger.error('Error generating conversation summary:', error);
@@ -507,110 +243,48 @@ export class RelationshipInsightsService {
   }
 
   /**
-   * Generate simple summary from communications
-   */
-  private generateSimpleSummary(communications: Communication[]): string {
-    const totalComms = communications.length;
-    const inboundCount = communications.filter(c => c.direction === 'inbound').length;
-    const outboundCount = communications.filter(c => c.direction === 'outbound').length;
-    
-    const timespan = this.getTimespan(communications);
-    const topics = this.extractTopics(communications);
-
-    return `Conversation summary: ${totalComms} messages exchanged over ${timespan}. ` +
-           `Client sent ${inboundCount} messages, agent responded ${outboundCount} times. ` +
-           `Main topics discussed: ${topics.join(', ')}.`;
-  }
-
-  /**
-   * Get timespan of communications
-   */
-  private getTimespan(communications: Communication[]): string {
-    if (communications.length < 2) return 'single interaction';
-
-    const sorted = communications.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-    const start = sorted[0].timestamp;
-    const end = sorted[sorted.length - 1].timestamp;
-    
-    const diffHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-    
-    if (diffHours < 24) return `${Math.round(diffHours)} hours`;
-    const diffDays = Math.round(diffHours / 24);
-    return `${diffDays} day${diffDays > 1 ? 's' : ''}`;
-  }
-
-  /**
-   * Extract topics from communications
-   */
-  private extractTopics(communications: Communication[]): string[] {
-    const allText = communications.map(c => c.content).join(' ').toLowerCase();
-    
-    const insuranceTopics = {
-      'policy': ['policy', 'coverage', 'premium'],
-      'claim': ['claim', 'accident', 'damage'],
-      'renewal': ['renewal', 'renew', 'expire'],
-      'payment': ['payment', 'bill', 'invoice'],
-      'quote': ['quote', 'estimate', 'rate']
-    };
-
-    const foundTopics: string[] = [];
-    
-    for (const [topic, keywords] of Object.entries(insuranceTopics)) {
-      if (keywords.some(keyword => allText.includes(keyword))) {
-        foundTopics.push(topic);
-      }
-    }
-
-    return foundTopics.length > 0 ? foundTopics : ['general inquiry'];
-  }
-
-  /**
    * Get sentiment trend data for visualization
    */
   async getSentimentTrend(
-    clientId: string, 
-    timeframe: '7d' | '30d' | '90d' | '1y' = '30d'
-  ): Promise<SentimentTrendData> {
+    clientId: string,
+    days = 30
+  ): Promise<SentimentTrendPoint[]> {
     try {
-      const days = this.getTimeframeDays(timeframe);
-      const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const cacheKey = `sentiment_trend:${clientId}:${days}`;
+      
+      // Check cache first
+      const cached = await this.redis.get(cacheKey);
+      if (cached) {
+        return JSON.parse(cached);
+      }
 
-      // Get communications with sentiment data
       const query = `
         SELECT 
-          DATE_TRUNC('day', timestamp) as date,
+          DATE(timestamp) as date,
           AVG(sentiment) as avg_sentiment,
           COUNT(*) as communication_count,
-          AVG(EXTRACT(EPOCH FROM (
-            LEAD(timestamp) OVER (ORDER BY timestamp) - timestamp
-          )) / 3600) as avg_response_time_hours
+          AVG(EXTRACT(EPOCH FROM (created_at - timestamp))/3600) as avg_response_time
         FROM communications 
         WHERE client_id = $1 
-          AND timestamp >= $2 
+          AND timestamp >= NOW() - INTERVAL '${days} days'
           AND sentiment IS NOT NULL
-        GROUP BY DATE_TRUNC('day', timestamp)
-        ORDER BY date
+        GROUP BY DATE(timestamp)
+        ORDER BY date ASC
       `;
 
-      const result = await this.db.query(query, [clientId, startDate]);
-
-      const dataPoints: SentimentTrendPoint[] = result.rows.map(row => ({
-        date: row.date,
+      const result = await this.db.query(query, [clientId]);
+      
+      const trendPoints: SentimentTrendPoint[] = result.rows.map(row => ({
+        date: new Date(row.date),
         sentimentScore: parseFloat(row.avg_sentiment) || 0,
         communicationCount: parseInt(row.communication_count) || 0,
-        averageResponseTime: parseFloat(row.avg_response_time_hours) || 0
+        averageResponseTime: parseFloat(row.avg_response_time) || 0
       }));
 
-      // Calculate overall trend
-      const { trend, strength } = this.calculateTrendDirection(dataPoints);
-
-      return {
-        clientId,
-        timeframe,
-        dataPoints,
-        overallTrend: trend,
-        trendStrength: strength
-      };
+      // Cache for 30 minutes
+      await this.redis.setex(cacheKey, 1800, JSON.stringify(trendPoints));
+      
+      return trendPoints;
 
     } catch (error) {
       logger.error('Error getting sentiment trend:', error);
@@ -619,126 +293,211 @@ export class RelationshipInsightsService {
   }
 
   /**
-   * Calculate trend direction and strength
+   * Generate actionable relationship insights
    */
-  private calculateTrendDirection(dataPoints: SentimentTrendPoint[]): { trend: 'improving' | 'stable' | 'declining', strength: number } {
-    if (dataPoints.length < 3) {
-      return { trend: 'stable', strength: 0 };
+  async generateRelationshipInsights(clientId: string): Promise<RelationshipInsight[]> {
+    try {
+      const insights: RelationshipInsight[] = [];
+      
+      // Get relationship health score
+      const healthScore = await this.calculateRelationshipHealth(clientId);
+      
+      // Get recent communications
+      const recentComms = await this.getRecentCommunications(clientId, 30);
+      
+      // Check for sentiment decline
+      if (healthScore.factors.sentimentTrend < 15) {
+        insights.push({
+          id: `insight_sentiment_${Date.now()}`,
+          clientId,
+          type: 'sentiment_change',
+          title: 'Declining Sentiment Detected',
+          description: 'Recent communications show a negative sentiment trend',
+          severity: 'high',
+          actionable: true,
+          suggestedActions: [
+            'Schedule a personal check-in call',
+            'Review recent service interactions',
+            'Send a personalized follow-up message'
+          ],
+          createdAt: new Date()
+        });
+      }
+
+      // Check for response delays
+      if (healthScore.factors.responseTime < 10) {
+        insights.push({
+          id: `insight_response_${Date.now()}`,
+          clientId,
+          type: 'response_delay',
+          title: 'Slow Response Times',
+          description: 'Client response times have increased significantly',
+          severity: 'medium',
+          actionable: true,
+          suggestedActions: [
+            'Simplify communication approach',
+            'Use preferred communication channel',
+            'Set clear expectations for response times'
+          ],
+          createdAt: new Date()
+        });
+      }
+
+      // Check for communication gaps
+      const daysSinceLastComm = recentComms.length > 0 
+        ? Math.floor((Date.now() - new Date(recentComms[0].timestamp).getTime()) / (1000 * 60 * 60 * 24))
+        : 999;
+
+      if (daysSinceLastComm > 14) {
+        insights.push({
+          id: `insight_gap_${Date.now()}`,
+          clientId,
+          type: 'communication_gap',
+          title: 'Communication Gap Detected',
+          description: `No communication for ${daysSinceLastComm} days`,
+          severity: daysSinceLastComm > 30 ? 'high' : 'medium',
+          actionable: true,
+          suggestedActions: [
+            'Send a friendly check-in message',
+            'Share relevant industry updates',
+            'Schedule a regular touchpoint'
+          ],
+          createdAt: new Date()
+        });
+      }
+
+      // Check for positive trends
+      if (healthScore.trend === 'improving' && healthScore.score > 75) {
+        insights.push({
+          id: `insight_positive_${Date.now()}`,
+          clientId,
+          type: 'positive_trend',
+          title: 'Strong Relationship Momentum',
+          description: 'Relationship health is improving with high engagement',
+          severity: 'low',
+          actionable: true,
+          suggestedActions: [
+            'Consider upselling opportunities',
+            'Request referrals or testimonials',
+            'Maintain current communication cadence'
+          ],
+          createdAt: new Date()
+        });
+      }
+
+      return insights;
+
+    } catch (error) {
+      logger.error('Error generating relationship insights:', error);
+      throw error;
     }
-
-    // Simple linear regression to determine trend
-    const n = dataPoints.length;
-    const sumX = dataPoints.reduce((sum, _, i) => sum + i, 0);
-    const sumY = dataPoints.reduce((sum, point) => sum + point.sentimentScore, 0);
-    const sumXY = dataPoints.reduce((sum, point, i) => sum + i * point.sentimentScore, 0);
-    const sumXX = dataPoints.reduce((sum, _, i) => sum + i * i, 0);
-
-    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-    const strength = Math.abs(slope);
-
-    let trend: 'improving' | 'stable' | 'declining' = 'stable';
-    if (slope > 0.1) trend = 'improving';
-    else if (slope < -0.1) trend = 'declining';
-
-    return { trend, strength: Math.min(1, strength * 10) };
   }
 
-  /**
-   * Helper methods
-   */
-  private getTimeframeDays(timeframe: string): number {
-    switch (timeframe) {
-      case '7d': return 7;
-      case '30d': return 30;
-      case '90d': return 90;
-      case '1y': return 365;
-      default: return 30;
-    }
-  }
-
-  private async getClientData(clientId: string): Promise<Client | null> {
-    const query = `
-      SELECT id, crm_id, crm_system, name, email, phone
-      FROM clients 
-      WHERE id = $1
-    `;
-
-    const result = await this.db.query(query, [clientId]);
-    return result.rows[0] || null;
-  }
+  // Private helper methods
 
   private async getRecentCommunications(clientId: string, days: number): Promise<Communication[]> {
-    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-    
     const query = `
-      SELECT id, client_id, type, direction, subject, content, timestamp, sentiment
-      FROM communications 
-      WHERE client_id = $1 AND timestamp >= $2
+      SELECT * FROM communications 
+      WHERE client_id = $1 
+        AND timestamp >= NOW() - INTERVAL '${days} days'
       ORDER BY timestamp DESC
     `;
-
-    const result = await this.db.query(query, [clientId, startDate]);
     
-    return result.rows.map(row => ({
-      id: row.id,
-      clientId: row.client_id,
-      type: row.type,
-      direction: row.direction,
-      subject: row.subject,
-      content: row.content,
-      timestamp: row.timestamp,
-      tags: [],
-      sentiment: row.sentiment,
-      isUrgent: false,
-      source: '',
-      metadata: {}
-    }));
+    const result = await this.db.query(query, [clientId]);
+    return result.rows;
   }
 
-  private async updateClientHealthScore(clientId: string, score: number): Promise<void> {
-    const query = `
-      UPDATE clients 
-      SET relationship_score = $1, updated_at = NOW()
-      WHERE id = $2
-    `;
-
-    await this.db.query(query, [score, clientId]);
+  private async getCommunicationsByIds(ids: string[]): Promise<Communication[]> {
+    if (ids.length === 0) return [];
+    
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+    const query = `SELECT * FROM communications WHERE id IN (${placeholders})`;
+    
+    const result = await this.db.query(query, ids);
+    return result.rows;
   }
 
-  private async saveConversationSummary(data: {
-    clientId: string;
-    communicationId?: string;
-    summary: string;
-    keyTopics: string[];
-    actionItems: string[];
-    sentimentScore: number;
-  }): Promise<ConversationSummary> {
+  private async calculateSentimentTrendScore(communications: Communication[]): Promise<number> {
+    if (communications.length === 0) return 15;
+
+    const sentiments = communications
+      .filter(comm => comm.sentiment !== null)
+      .map(comm => comm.sentiment || 0);
+
+    if (sentiments.length === 0) return 15;
+
+    const avgSentiment = sentiments.reduce((sum, s) => sum + s, 0) / sentiments.length;
+    
+    // Convert -1 to 1 scale to 0-30 points
+    return Math.max(0, Math.min(30, (avgSentiment + 1) * 15));
+  }
+
+  private calculateInteractionFrequencyScore(communications: Communication[]): number {
+    const daysWithComms = new Set(
+      communications.map(comm => new Date(comm.timestamp).toDateString())
+    ).size;
+    
+    // Expect at least 2-3 interactions per week (score out of 25)
+    const expectedDays = 12; // 2-3 days per week over 30 days
+    return Math.min(25, (daysWithComms / expectedDays) * 25);
+  }
+
+  private async calculateResponseTimeScore(clientId: string, communications: Communication[]): Promise<number> {
+    // This would need more complex logic to track response times
+    // For now, return a default score
+    return 15;
+  }
+
+  private calculateRecentActivityScore(communications: Communication[]): number {
+    const last7Days = communications.filter(comm => 
+      new Date(comm.timestamp) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    );
+    
+    // Score based on recent activity (out of 15)
+    return Math.min(15, last7Days.length * 2);
+  }
+
+  private async calculateCommunicationQualityScore(communications: Communication[]): Promise<number> {
+    // Score based on message length, sentiment, and engagement
+    const avgLength = communications.reduce((sum, comm) => sum + comm.content.length, 0) / communications.length;
+    const qualityScore = Math.min(10, avgLength / 100); // Longer messages = higher quality
+    
+    return qualityScore;
+  }
+
+  private async determineTrend(clientId: string, recentComms: Communication[]): Promise<'improving' | 'stable' | 'declining'> {
+    if (recentComms.length < 4) return 'stable';
+
+    const mid = Math.floor(recentComms.length / 2);
+    const recent = recentComms.slice(0, mid);
+    const older = recentComms.slice(mid);
+
+    const recentAvg = recent.reduce((sum, comm) => sum + (comm.sentiment || 0), 0) / recent.length;
+    const olderAvg = older.reduce((sum, comm) => sum + (comm.sentiment || 0), 0) / older.length;
+
+    const diff = recentAvg - olderAvg;
+    
+    if (diff > 0.1) return 'improving';
+    if (diff < -0.1) return 'declining';
+    return 'stable';
+  }
+
+  private async storeSummary(summary: ConversationSummary): Promise<void> {
     const query = `
       INSERT INTO conversation_summaries 
-      (client_id, communication_id, summary, sentiment_score, key_topics, action_items)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, client_id, communication_id, summary, sentiment_score, key_topics, action_items, created_at
+      (id, client_id, communication_id, summary, key_topics, action_items, sentiment_score, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     `;
-
-    const result = await this.db.query(query, [
-      data.clientId,
-      data.communicationId,
-      data.summary,
-      data.sentimentScore,
-      data.keyTopics,
-      data.actionItems
+    
+    await this.db.query(query, [
+      summary.id,
+      summary.clientId,
+      summary.communicationId,
+      summary.summary,
+      JSON.stringify(summary.keyTopics),
+      JSON.stringify(summary.actionItems),
+      summary.sentimentScore,
+      summary.createdAt
     ]);
-
-    const row = result.rows[0];
-    return {
-      id: row.id,
-      clientId: row.client_id,
-      communicationId: row.communication_id,
-      summary: row.summary,
-      keyTopics: row.key_topics,
-      actionItems: row.action_items,
-      sentimentScore: row.sentiment_score,
-      createdAt: row.created_at
-    };
   }
 }

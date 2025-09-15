@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { DatabaseService } from '../database';
+import { Pool } from 'pg';
 import { CacheService } from '../cacheService';
 import { EmailMessage, EmailSearchQuery } from '../../types/email';
 import { PhoneCall, SmsMessage } from '../../types/twilio';
@@ -73,7 +73,7 @@ export class CommunicationCenterService extends EventEmitter {
   private wsServer?: WebSocketServer;
 
   constructor(
-    private dbService: typeof DatabaseService,
+    private dbService: Pool,
     private cacheService: CacheService
   ) {
     super();

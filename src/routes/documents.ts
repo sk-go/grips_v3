@@ -23,7 +23,9 @@ const upload = multer({
   }
 });
 
-export function createDocumentRoutes(db: typeof import('../services/database').DatabaseService) {
+import { Pool } from 'pg';
+
+export function createDocumentRoutes(db: Pool) {
   const templateService = new TemplateManagementService(db);
   const documentService = new DocumentGenerationService(db);
   const workflowService = new DocumentWorkflowService(db, documentService);

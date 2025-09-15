@@ -7,8 +7,8 @@ import {
   TwilioWebhookPayload,
   CallTranscriptionResult 
 } from '../../types/twilio';
+import { Pool } from 'pg';
 import { OfficeHoursService } from './officeHoursService';
-import { DatabaseService } from '../database';
 import { CacheService } from '../cacheService';
 import { logger } from '../../utils/logger';
 
@@ -18,12 +18,12 @@ export class TwilioService extends EventEmitter {
 
   constructor(
     private config: TwilioServiceConfig,
-    private dbService: DatabaseService,
+    private dbService: Pool,
     private cacheService: CacheService
   ) {
     super();
     this.twilioClient = new Twilio(config.accountSid, config.authToken);
-    this.officeHoursService = new OfficeHoursService(DatabaseService);
+    this.officeHoursService = new OfficeHoursService(dbService);
   }
 
   public async setupWebhooks(): Promise<void> {
@@ -335,7 +335,7 @@ export class TwilioService extends EventEmitter {
       RETURNING *
     `;
 
-    const result = await DatabaseService.query(query, [
+    const result = await this.dbService.query(query, [
       call.twilioCallSid,
       call.from,
       call.to,
@@ -364,7 +364,7 @@ export class TwilioService extends EventEmitter {
       RETURNING *
     `;
 
-    const result = await DatabaseService.query(query, [
+    const result = await this.dbService.query(query, [
       sms.twilioMessageSid,
       sms.from,
       sms.to,
@@ -401,12 +401,12 @@ export class TwilioService extends EventEmitter {
     values.push(twilioCallSid);
 
     const query = `UPDATE phone_calls SET ${setParts.join(', ')} WHERE twilio_call_sid = $${paramIndex}`;
-    await DatabaseService.query(query, values);
+    await this.dbService.query(query, values);
   }
 
   private async updateSmsClientId(smsId: string, clientId: string): Promise<void> {
     const query = 'UPDATE sms_messages SET client_id = $1, updated_at = NOW() WHERE id = $2';
-    await DatabaseService.query(query, [clientId, smsId]);
+    await this.dbService.query(query, [clientId, smsId]);
   }
 
   private async getUserIdFromPhoneNumber(phoneNumber: string): Promise<string | null> {

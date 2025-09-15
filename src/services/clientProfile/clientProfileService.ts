@@ -3,6 +3,7 @@
  * Handles CRM data fetching, relationship management, and profile enhancement
  */
 
+import { Pool } from 'pg';
 import { Redis } from 'ioredis';
 import { 
   Client, 
@@ -14,7 +15,6 @@ import {
   REDIS_KEYS
 } from '../../types';
 import { CrmSyncService } from '../crm/crmSyncService';
-import { DatabaseService } from '../database/DatabaseService';
 import { logger } from '../../utils/logger';
 
 export interface ClientProfileData {
@@ -56,7 +56,7 @@ export interface RelationshipGraph {
 
 export class ClientProfileService {
   constructor(
-    private db: typeof DatabaseService,
+    private db: Pool,
     private redis: Redis,
     private crmSyncService: CrmSyncService
   ) {}

@@ -11,8 +11,10 @@ import { NLPProcessingService } from '../services/nlp/nlpProcessingService';
 import { authMiddleware } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
+import { Pool } from 'pg';
+
 export function createRelationshipInsightsRoutes(
-    db: typeof import('../services/database').DatabaseService,
+    db: Pool,
     redis: RedisClientType,
     nlpService: NLPProcessingService
 ): Router {

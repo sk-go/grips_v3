@@ -3,6 +3,7 @@
  * Handles fetching and synchronizing client data from various CRM systems
  */
 
+import { Pool } from 'pg';
 import { Redis } from 'ioredis';
 import { 
   Client, 
@@ -14,7 +15,6 @@ import {
 } from '../../types';
 import { CrmSyncService } from '../crm/crmSyncService';
 import { CrmConnectorFactory } from '../crm/crmConnectorFactory';
-import { DatabaseService } from '../database/DatabaseService';
 import { logger } from '../../utils/logger';
 
 export interface CrmClientData {
@@ -48,7 +48,7 @@ export interface CrmConnectionStatus {
 
 export class CrmDataFetchingService {
   constructor(
-    private db: typeof DatabaseService,
+    private db: Pool,
     private redis: Redis,
     private crmSyncService: CrmSyncService
   ) {}

@@ -28,7 +28,7 @@ import voiceRoutes, { initializeVoiceRoutes } from './routes/voice';
 import { createClientProfileRoutes } from './routes/clientProfile';
 import { createRelationshipInsightsRoutes } from './routes/relationshipInsights';
 import createDocumentRoutes from './routes/documents';
-import { DatabaseService } from './services/database';
+import { PostgreSQLService } from './services/database/postgresqlService';
 import { RedisService } from './services/redis';
 import { CacheService } from './services/cacheService';
 import { EmailIntegrationService } from './services/email/emailIntegrationService';
@@ -115,14 +115,17 @@ const PORT = process.env.PORT || 3000;
 
 async function startServer() {
   try {
-    // Initialize database connection using new abstracted service
-    await DatabaseService.initialize();
-    logger.info(`Database connection established (${DatabaseService.getDatabaseType()})`);
+    // Initialize PostgreSQL connection
+    await PostgreSQLService.initialize();
+    await PostgreSQLService.runMigrations();
+    logger.info('PostgreSQL connection established');
+
+    // Get the PostgreSQL pool for services
+    const dbPool = PostgreSQLService.getPool();
 
     // Add client profile routes after database is initialized
-    // Use the abstracted DatabaseService instead of direct pool connection
-    app.use('/api/clients', createClientProfileRoutes(DatabaseService, RedisService));
-    app.use('/api/documents', createDocumentRoutes(DatabaseService));
+    app.use('/api/clients', createClientProfileRoutes(dbPool, RedisService));
+    app.use('/api/documents', createDocumentRoutes(dbPool));
 
     // Initialize Redis connection
     await RedisService.initialize();
@@ -165,7 +168,7 @@ async function startServer() {
     logger.info('NLP service initialized');
 
     // Add relationship insights routes
-    app.use('/api/relationship-insights', createRelationshipInsightsRoutes(DatabaseService, RedisService.getClient(), nlpService.getProcessor()));
+    app.use('/api/relationship-insights', createRelationshipInsightsRoutes(dbPool, RedisService.getClient(), nlpService.getProcessor()));
     logger.info('Relationship insights routes initialized');
 
     // Initialize email services
@@ -211,8 +214,8 @@ async function startServer() {
       transcriptionAccuracyThreshold: parseFloat(process.env.TWILIO_TRANSCRIPTION_ACCURACY_THRESHOLD || '0.95'),
     };
 
-    const twilioService = new TwilioService(twilioConfig, DatabaseService, cacheService);
-    const officeHoursService = new OfficeHoursService(DatabaseService);
+    const twilioService = new TwilioService(twilioConfig, dbPool, cacheService);
+    const officeHoursService = new OfficeHoursService(dbPool);
 
     // Setup Twilio webhooks if configured
     if (twilioConfig.accountSid && twilioConfig.authToken && twilioConfig.phoneNumber) {
@@ -228,7 +231,7 @@ async function startServer() {
     logger.info('Twilio services initialized');
 
     // Initialize Communication Center service
-    const communicationCenterService = new CommunicationCenterService(DatabaseService, cacheService);
+    const communicationCenterService = new CommunicationCenterService(dbPool, cacheService);
     communicationCenterService.setWebSocketServer(wss);
 
     // Set up event listeners for real-time updates
@@ -317,14 +320,14 @@ async function startServer() {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
-  await DatabaseService.close();
+  await PostgreSQLService.close();
   await RedisService.close();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully');
-  await DatabaseService.close();
+  await PostgreSQLService.close();
   await RedisService.close();
   process.exit(0);
 });

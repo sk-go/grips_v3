@@ -1,9 +1,9 @@
+import { Pool } from 'pg';
 import { OfficeHours, DaySchedule } from '../../types/twilio';
-import { DatabaseService } from '../database';
 import { logger } from '../../utils/logger';
 
 export class OfficeHoursService {
-  constructor(private dbService: typeof DatabaseService) {}
+  constructor(private dbService: Pool) {}
 
   public async getOfficeHours(userId: string): Promise<OfficeHours | null> {
     try {

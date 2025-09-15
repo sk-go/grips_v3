@@ -3,8 +3,8 @@
  * Handles data preparation for D3.js relationship graph visualization
  */
 
+import { Pool } from 'pg';
 import { Redis } from 'ioredis';
-import { DatabaseService } from '../database/DatabaseService';
 import { logger } from '../../utils/logger';
 
 export interface GraphNode {
@@ -68,7 +68,7 @@ export interface GraphLayoutConfig {
 
 export class RelationshipVisualizationService {
   constructor(
-    private db: typeof DatabaseService,
+    private db: Pool,
     private redis: Redis
   ) {}
 
