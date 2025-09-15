@@ -1,0 +1,36 @@
+version: '3.8'
+
+# Optional PostgreSQL service for development
+# Use this when you want to test with PostgreSQL instead of SQLite
+# 
+# Usage:
+#   # Start with PostgreSQL
+#   docker-compose -f docker-compose.yml -f docker-compose.optional-postgres.yml up
+#   
+#   # Start without PostgreSQL (SQLite only)
+#   docker-compose up redis
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: rcp-postgres-optional
+    environment:
+      POSTGRES_DB: relationship_care_platform
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_optional:/var/lib/postgresql/data
+      - ./src/database/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - postgres
+      - full
+
+volumes:
+  postgres_data_optional:
