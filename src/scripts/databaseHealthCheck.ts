@@ -6,7 +6,6 @@
  */
 
 import { DatabaseService } from '../services/database/DatabaseService';
-import { getDatabaseConfig } from '../services/database/config';
 import { logger } from '../utils/logger';
 import * as fs from 'fs';
 
@@ -102,9 +101,8 @@ Exit Codes:
   2 - Cannot connect to database
 
 Environment Variables:
-  DATABASE_TYPE     Database type: 'sqlite' or 'postgresql'
-  SQLITE_FILENAME   SQLite database file path
-  DB_HOST          PostgreSQL host
+  SUPABASE_DB_URL   Supabase database connection URL
+  DB_HOST          PostgreSQL host (alternative to SUPABASE_DB_URL)
   DB_NAME          PostgreSQL database name
   DB_USER          PostgreSQL username
   DB_PASSWORD      PostgreSQL password
@@ -114,7 +112,7 @@ Environment Variables:
 /**
  * Check database connectivity and basic info
  */
-async function checkDatabaseConnection(dbService: DatabaseService): Promise<{
+async function checkDatabaseConnection(): Promise<{
   connected: boolean;
   connectionTime: number;
   version?: string;
@@ -123,38 +121,22 @@ async function checkDatabaseConnection(dbService: DatabaseService): Promise<{
   const startTime = Date.now();
   
   try {
-    const client = await dbService.getClient();
+    const client = await DatabaseService.getClient();
     const connectionTime = Date.now() - startTime;
     
     try {
       // Test basic query
       await client.query('SELECT 1');
       
-      // Get database version
-      const config = getDatabaseConfig();
-      let version: string | undefined;
-      let size: string | undefined;
+      // Get PostgreSQL database version and size
+      const versionResult = await client.query('SELECT version()');
+      const version = versionResult.rows[0].version.split(' ')[0] + ' ' + versionResult.rows[0].version.split(' ')[1];
       
-      if (config.type === 'sqlite') {
-        const versionResult = await client.query('SELECT sqlite_version() as version');
-        version = `SQLite ${versionResult.rows[0].version}`;
-        
-        // Get database file size
-        const sqliteFile = config.sqlite?.filename;
-        if (sqliteFile && sqliteFile !== ':memory:' && fs.existsSync(sqliteFile)) {
-          const stats = fs.statSync(sqliteFile);
-          size = `${(stats.size / 1024 / 1024).toFixed(2)} MB`;
-        }
-      } else {
-        const versionResult = await client.query('SELECT version()');
-        version = versionResult.rows[0].version.split(' ')[0] + ' ' + versionResult.rows[0].version.split(' ')[1];
-        
-        // Get database size
-        const sizeResult = await client.query(`
-          SELECT pg_size_pretty(pg_database_size(current_database())) as size
-        `);
-        size = sizeResult.rows[0].size;
-      }
+      // Get database size
+      const sizeResult = await client.query(`
+        SELECT pg_size_pretty(pg_database_size(current_database())) as size
+      `);
+      const size = sizeResult.rows[0].size;
       
       return {
         connected: true,
@@ -179,29 +161,19 @@ async function checkDatabaseConnection(dbService: DatabaseService): Promise<{
 /**
  * Check migration status
  */
-async function checkMigrations(dbService: DatabaseService): Promise<{
+async function checkMigrations(): Promise<{
   applied: number;
   pending: number;
   latest?: string;
 }> {
-  const client = await dbService.getClient();
+  const client = await DatabaseService.getClient();
   
   try {
-    const config = getDatabaseConfig();
-    
     // Check if migrations table exists
-    let migrationTableQuery: string;
-    if (config.type === 'sqlite') {
-      migrationTableQuery = `
-        SELECT name FROM sqlite_master 
-        WHERE type='table' AND name='schema_migrations'
-      `;
-    } else {
-      migrationTableQuery = `
-        SELECT tablename FROM pg_tables 
-        WHERE tablename = 'schema_migrations'
-      `;
-    }
+    const migrationTableQuery = `
+      SELECT tablename FROM pg_tables 
+      WHERE tablename = 'schema_migrations'
+    `;
     
     const tableResult = await client.query(migrationTableQuery);
     if (tableResult.rows.length === 0) {
@@ -244,7 +216,7 @@ async function checkMigrations(dbService: DatabaseService): Promise<{
 /**
  * Check table information
  */
-async function checkTables(dbService: DatabaseService, verbose: boolean): Promise<{
+async function checkTables(verbose: boolean): Promise<{
   count: number;
   details?: Array<{
     name: string;
@@ -252,26 +224,15 @@ async function checkTables(dbService: DatabaseService, verbose: boolean): Promis
     size?: string;
   }>;
 }> {
-  const client = await dbService.getClient();
+  const client = await DatabaseService.getClient();
   
   try {
-    const config = getDatabaseConfig();
-    
-    // Get table list
-    let tableQuery: string;
-    if (config.type === 'sqlite') {
-      tableQuery = `
-        SELECT name FROM sqlite_master 
-        WHERE type='table' AND name NOT LIKE 'sqlite_%'
-        ORDER BY name
-      `;
-    } else {
-      tableQuery = `
-        SELECT tablename as name FROM pg_tables 
-        WHERE schemaname = 'public'
-        ORDER BY tablename
-      `;
-    }
+    // Get PostgreSQL table list
+    const tableQuery = `
+      SELECT tablename as name FROM pg_tables 
+      WHERE schemaname = 'public'
+      ORDER BY tablename
+    `;
     
     const tablesResult = await client.query(tableQuery);
     const tables = tablesResult.rows;
@@ -288,13 +249,11 @@ async function checkTables(dbService: DatabaseService, verbose: boolean): Promis
         const countResult = await client.query(`SELECT COUNT(*) as count FROM ${table.name}`);
         const rowCount = parseInt(countResult.rows[0].count, 10);
         
-        let size: string | undefined;
-        if (config.type === 'postgresql') {
-          const sizeResult = await client.query(`
-            SELECT pg_size_pretty(pg_total_relation_size($1)) as size
-          `, [table.name]);
-          size = sizeResult.rows[0].size;
-        }
+        // Get table size for PostgreSQL
+        const sizeResult = await client.query(`
+          SELECT pg_size_pretty(pg_total_relation_size($1)) as size
+        `, [table.name]);
+        const size = sizeResult.rows[0].size;
         
         details.push({
           name: table.name,
@@ -326,10 +285,10 @@ async function checkTables(dbService: DatabaseService, verbose: boolean): Promis
 /**
  * Performance test
  */
-async function checkPerformance(dbService: DatabaseService): Promise<{
+async function checkPerformance(): Promise<{
   queryTime: number;
 }> {
-  const client = await dbService.getClient();
+  const client = await DatabaseService.getClient();
   
   try {
     const startTime = Date.now();
@@ -493,15 +452,13 @@ async function main(): Promise<void> {
   };
 
   try {
-    // Get database configuration
-    const config = getDatabaseConfig();
-    result.database.type = config.type;
+    result.database.type = 'postgresql';
 
     // Initialize database service
-    const dbService = new DatabaseService();
+    await DatabaseService.initialize();
     
     // Check database connection
-    const connectionInfo = await checkDatabaseConnection(dbService);
+    const connectionInfo = await checkDatabaseConnection();
     result.database = { ...result.database, ...connectionInfo };
     result.performance.connectionTime = connectionInfo.connectionTime;
 
@@ -511,21 +468,18 @@ async function main(): Promise<void> {
       process.exit(2);
     }
 
-    // Initialize database service properly
-    await dbService.initialize();
-
     // Check migrations
-    result.migrations = await checkMigrations(dbService);
+    result.migrations = await checkMigrations();
 
     // Check tables
-    result.tables = await checkTables(dbService, options.verbose || false);
+    result.tables = await checkTables(options.verbose || false);
 
     // Check performance
-    const perfInfo = await checkPerformance(dbService);
+    const perfInfo = await checkPerformance();
     result.performance.queryTime = perfInfo.queryTime;
 
     // Close database connection
-    await dbService.close();
+    await DatabaseService.close();
 
     // Analyze results
     analyzeResults(result);

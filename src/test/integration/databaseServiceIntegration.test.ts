@@ -4,8 +4,6 @@
 
 import { DatabaseService } from '../../services/database';
 import { DatabaseConfigManager } from '../../services/database/config';
-import { SQLiteAdapter } from '../../services/database/adapters/SQLiteAdapter';
-import { PostgreSQLAdapter } from '../../services/database/adapters/PostgreSQLAdapter';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -23,7 +21,6 @@ describe('DatabaseService Application Integration', () => {
     // Clear environment variables
     delete process.env.DATABASE_TYPE;
     delete process.env.NODE_ENV;
-    delete process.env.SQLITE_FILENAME;
     delete process.env.DB_HOST;
     delete process.env.DB_PORT;
     delete process.env.DB_NAME;
@@ -59,23 +56,32 @@ describe('DatabaseService Application Integration', () => {
     }
   });
 
-  describe('SQLite Integration', () => {
+  describe('Supabase Integration', () => {
     beforeEach(() => {
-      // Set environment for SQLite
+      // Set environment for Supabase/PostgreSQL
       process.env.NODE_ENV = 'development';
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = ':memory:';
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
     });
 
-    it('should initialize successfully with SQLite', async () => {
+    it('should initialize successfully with Supabase', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
       await expect(DatabaseService.initialize({ skipMigrations: true })).resolves.not.toThrow();
       
       const healthCheck = await DatabaseService.healthCheck();
       expect(healthCheck.status).toBe('healthy');
-      expect(healthCheck.type).toBe('sqlite');
+      expect(healthCheck.type).toBe('postgresql');
     });
 
     it('should execute basic queries', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
       await DatabaseService.initialize({ skipMigrations: true });
       
       const result = await DatabaseService.query('SELECT 1 as test');
@@ -85,75 +91,50 @@ describe('DatabaseService Application Integration', () => {
 
     it('should provide configuration summary', () => {
       const summary = DatabaseService.getConfigSummary();
-      expect(summary).toHaveProperty('type', 'sqlite');
+      expect(summary).toHaveProperty('type', 'postgresql');
     });
 
-    it('should handle file-based SQLite database', async () => {
-      const dbPath = path.join(tempDir, 'test.db');
-      process.env.SQLITE_FILENAME = dbPath;
+    it('should handle PostgreSQL native features', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
       
       await DatabaseService.initialize({ skipMigrations: true });
       
-      // Verify database file was created
-      expect(fs.existsSync(dbPath)).toBe(true);
-      
-      // Test basic operations
+      // Test basic operations with PostgreSQL syntax
       await DatabaseService.query(`
-        CREATE TABLE test_table (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL
-        )
-      `);
-      
-      await DatabaseService.query(
-        'INSERT INTO test_table (id, name) VALUES (?, ?)',
-        ['1', 'Test Name']
-      );
-      
-      const result = await DatabaseService.query('SELECT * FROM test_table');
-      expect(result.rows).toHaveLength(1);
-      expect(result.rows[0]).toEqual({ id: '1', name: 'Test Name' });
-    });
-
-    it('should run migrations with SQLite', async () => {
-      // Skip this test for now due to complex PostgreSQL trigger syntax in existing migrations
-      // TODO: Improve SQL compatibility layer to handle complex triggers
-      console.log('Skipping migration test due to complex PostgreSQL syntax in existing migrations');
-    });
-
-    it('should handle PostgreSQL-compatible SQL with translation', async () => {
-      await DatabaseService.initialize({ skipMigrations: true });
-      
-      // Create table with PostgreSQL syntax
-      await DatabaseService.query(`
-        CREATE TABLE users (
+        CREATE TABLE IF NOT EXISTS test_table (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          email VARCHAR(255) UNIQUE NOT NULL,
-          active BOOLEAN DEFAULT true,
+          name TEXT NOT NULL,
           metadata JSONB DEFAULT '{}',
+          active BOOLEAN DEFAULT true,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
       `);
       
-      // Insert data using PostgreSQL syntax
-      await DatabaseService.query(`
-        INSERT INTO users (email, active, metadata) 
-        VALUES ('test@example.com', true, '{"role": "admin"}')
-      `);
+      await DatabaseService.query(
+        'INSERT INTO test_table (name, metadata, active) VALUES ($1, $2, $3)',
+        ['Test Name', '{"key": "value"}', true]
+      );
       
-      // Query data
-      const result = await DatabaseService.query('SELECT * FROM users');
+      const result = await DatabaseService.query('SELECT * FROM test_table');
       expect(result.rows).toHaveLength(1);
-      expect(result.rows[0].email).toBe('test@example.com');
-      expect(result.rows[0].active).toBe(1); // Boolean converted to integer
+      expect(result.rows[0].name).toBe('Test Name');
+      expect(result.rows[0].active).toBe(true);
     });
 
     it('should handle concurrent operations', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
       await DatabaseService.initialize({ skipMigrations: true });
       
       await DatabaseService.query(`
-        CREATE TABLE concurrent_test (
-          id TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS concurrent_test (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           value INTEGER
         )
       `);
@@ -161,18 +142,23 @@ describe('DatabaseService Application Integration', () => {
       // Execute multiple operations concurrently
       const operations = Array.from({ length: 10 }, (_, i) =>
         DatabaseService.query(
-          'INSERT INTO concurrent_test (id, value) VALUES (?, ?)',
-          [`id-${i}`, i]
+          'INSERT INTO concurrent_test (value) VALUES ($1)',
+          [i]
         )
       );
       
       await Promise.all(operations);
       
       const result = await DatabaseService.query('SELECT COUNT(*) as count FROM concurrent_test');
-      expect(result.rows[0].count).toBe(10);
+      expect(parseInt(result.rows[0].count)).toBe(10);
     });
 
     it('should handle client acquisition and release', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
       await DatabaseService.initialize({ skipMigrations: true });
       
       const client = await DatabaseService.getClient();
@@ -181,9 +167,9 @@ describe('DatabaseService Application Integration', () => {
       const result = await client.query('SELECT 1 as test');
       expect(result.rows[0].test).toBe(1);
       
-      // SQLite client doesn't need explicit release, but should not error
-      if (client.release) {
-        client.release();
+      // PostgreSQL client should have release method
+      if ('release' in client && typeof client.release === 'function') {
+        (client as any).release();
       }
     });
   });
@@ -332,150 +318,125 @@ describe('DatabaseService Application Integration', () => {
   });
 
   describe('Database Migration Integration', () => {
-    it('should migrate from SQLite to PostgreSQL data format', async () => {
-      // First, set up SQLite with test data
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = path.join(tempDir, 'migration-test.db');
+    it('should handle PostgreSQL migrations natively', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       await DatabaseService.initialize({ skipMigrations: true });
       
-      // Create test table and data
+      // Create test table with PostgreSQL native types
       await DatabaseService.query(`
-        CREATE TABLE test_migration (
-          id TEXT PRIMARY KEY,
-          data TEXT,
-          active INTEGER,
-          created_at DATETIME
+        CREATE TABLE IF NOT EXISTS test_migration (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          data JSONB DEFAULT '{}',
+          active BOOLEAN DEFAULT true,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
       `);
       
       await DatabaseService.query(`
-        INSERT INTO test_migration (id, data, active, created_at) 
-        VALUES ('test-1', '{"key": "value"}', 1, '2024-01-01 12:00:00')
+        INSERT INTO test_migration (data, active) 
+        VALUES ('{"key": "value"}', true)
       `);
       
-      // Verify data exists
-      const sqliteResult = await DatabaseService.query('SELECT * FROM test_migration');
-      expect(sqliteResult.rows).toHaveLength(1);
-      
-      await DatabaseService.close();
-      
-      // Now test that the same schema would work with PostgreSQL syntax
-      // (We can't actually migrate to PostgreSQL without a server, but we can test the SQL compatibility)
-      
-      // Reset and use SQLite again but with PostgreSQL-style queries
-      DatabaseService.reset();
-      process.env.SQLITE_FILENAME = path.join(tempDir, 'migration-test2.db');
-      
-      await DatabaseService.initialize({ skipMigrations: true });
-      
-      // Create table using PostgreSQL syntax (should be translated)
-      await DatabaseService.query(`
-        CREATE TABLE test_migration (
-          id UUID PRIMARY KEY,
-          data JSONB,
-          active BOOLEAN,
-          created_at TIMESTAMP WITH TIME ZONE
-        )
-      `);
-      
-      // Insert using PostgreSQL syntax
-      await DatabaseService.query(`
-        INSERT INTO test_migration (id, data, active, created_at) 
-        VALUES ('test-uuid', '{"key": "value"}', true, NOW())
-      `);
-      
+      // Verify data exists with native PostgreSQL types
       const result = await DatabaseService.query('SELECT * FROM test_migration');
       expect(result.rows).toHaveLength(1);
-      expect(result.rows[0].active).toBe(1); // Boolean converted to integer
+      expect(result.rows[0].active).toBe(true); // Native boolean
+      expect(typeof result.rows[0].data).toBe('object'); // Native JSONB
     });
 
     it('should handle migration rollback scenarios', async () => {
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = path.join(tempDir, 'rollback-test.db');
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       await DatabaseService.initialize({ skipMigrations: true });
       
       // Create initial state
       await DatabaseService.query(`
-        CREATE TABLE rollback_test (
-          id TEXT PRIMARY KEY,
-          value INTEGER
+        CREATE TABLE IF NOT EXISTS rollback_test (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          value INTEGER UNIQUE
         )
       `);
       
       await DatabaseService.query(
-        'INSERT INTO rollback_test (id, value) VALUES (?, ?)',
-        ['initial', 100]
+        'INSERT INTO rollback_test (value) VALUES ($1)',
+        [100]
       );
       
       // Simulate a failed migration by attempting an invalid operation
       try {
-        await DatabaseService.query(`
-          BEGIN TRANSACTION;
-          INSERT INTO rollback_test (id, value) VALUES ('new', 200);
-          INSERT INTO rollback_test (id, value) VALUES ('duplicate', 300);
-          INSERT INTO rollback_test (id, value) VALUES ('duplicate', 400); -- This should fail
-          COMMIT;
-        `);
+        const client = await DatabaseService.getClient();
+        await client.query('BEGIN');
+        await client.query('INSERT INTO rollback_test (value) VALUES ($1)', [200]);
+        await client.query('INSERT INTO rollback_test (value) VALUES ($1)', [300]);
+        await client.query('INSERT INTO rollback_test (value) VALUES ($1)', [100]); // This should fail due to unique constraint
+        await client.query('COMMIT');
+        client.release();
         fail('Expected transaction to fail');
       } catch (error) {
         // Transaction should have been rolled back
         const result = await DatabaseService.query('SELECT COUNT(*) as count FROM rollback_test');
-        expect(result.rows[0].count).toBe(1); // Only initial record should remain
+        expect(parseInt(result.rows[0].count)).toBe(1); // Only initial record should remain
       }
     });
   });
 
-  describe('Cross-Database Compatibility', () => {
-    it('should handle identical queries on both database types', async () => {
+  describe('PostgreSQL Native Features', () => {
+    it('should handle PostgreSQL-specific queries', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
       const testQueries = [
         'SELECT 1 as test_number',
         'SELECT \'hello\' as test_string',
         'SELECT NULL as test_null'
       ];
 
-      // Test with SQLite
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = ':memory:';
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       await DatabaseService.initialize({ skipMigrations: true });
       
-      const sqliteResults = [];
+      const results = [];
       for (const query of testQueries) {
         const result = await DatabaseService.query(query);
-        sqliteResults.push(result.rows[0]);
+        results.push(result.rows[0]);
       }
       
-      await DatabaseService.close();
-      DatabaseService.reset();
+      // Verify PostgreSQL results
+      expect((results[0] as any).test_number).toBe(1);
+      expect((results[1] as any).test_string).toBe('hello');
+      expect((results[2] as any).test_null).toBeNull();
       
-      // Test with PostgreSQL configuration (will fail to connect, but we can test query preparation)
-      process.env.DATABASE_TYPE = 'postgresql';
-      process.env.DB_HOST = 'localhost';
-      process.env.DB_NAME = 'test';
-      process.env.DB_USER = 'test';
-      process.env.DB_PASSWORD = 'test';
-      
-      // We can't actually test PostgreSQL without a server, but we can verify configuration
+      // Verify configuration
       const config = DatabaseService.getConfigSummary() as any;
       expect(config.type).toBe('postgresql');
-      
-      // Verify SQLite results were as expected
-      expect(sqliteResults[0].test_number).toBe(1);
-      expect(sqliteResults[1].test_string).toBe('hello');
-      expect(sqliteResults[2].test_null).toBeNull();
     });
 
-    it('should translate complex PostgreSQL queries for SQLite', async () => {
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = ':memory:';
+    it('should handle complex PostgreSQL queries natively', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       await DatabaseService.initialize({ skipMigrations: true });
       
-      // Create table with PostgreSQL syntax
+      // Create table with PostgreSQL native types
       await DatabaseService.query(`
-        CREATE TABLE complex_test (
+        CREATE TABLE IF NOT EXISTS complex_test (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           user_data JSONB DEFAULT '{}',
           tags TEXT[] DEFAULT '{}',
@@ -490,12 +451,17 @@ describe('DatabaseService Application Integration', () => {
       await DatabaseService.query(`
         INSERT INTO complex_test (user_data, tags, is_active, score) 
         VALUES (
-          '{"name": "John", "age": 30}',
-          '["tag1", "tag2", "tag3"]',
-          true,
-          95.5
+          $1,
+          $2,
+          $3,
+          $4
         )
-      `);
+      `, [
+        '{"name": "John", "age": 30}',
+        ['tag1', 'tag2', 'tag3'],
+        true,
+        95.5
+      ]);
       
       // Query with PostgreSQL-style operations
       const result = await DatabaseService.query(`
@@ -512,39 +478,48 @@ describe('DatabaseService Application Integration', () => {
       `);
       
       expect(result.rows).toHaveLength(1);
-      expect(result.rows[0].is_active).toBe(1); // Boolean converted to integer
-      expect(result.rows[0].score).toBe(95.5);
+      expect(result.rows[0].is_active).toBe(true); // Native boolean in PostgreSQL
+      expect(Array.isArray(result.rows[0].tags)).toBe(true); // Native array
+      expect(typeof result.rows[0].user_data).toBe('object'); // Native JSONB
     });
   });
 
   describe('Performance and Scalability Integration', () => {
     it('should handle large datasets efficiently', async () => {
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = path.join(tempDir, 'performance-test.db');
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       await DatabaseService.initialize({ skipMigrations: true });
       
       // Create test table
       await DatabaseService.query(`
-        CREATE TABLE performance_test (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
+        CREATE TABLE IF NOT EXISTS performance_test (
+          id SERIAL PRIMARY KEY,
           data TEXT,
-          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
       `);
       
-      // Insert large dataset
+      // Insert large dataset using batch operations
       const startTime = Date.now();
       const batchSize = 100;
       
       for (let batch = 0; batch < 10; batch++) {
         const values = Array.from({ length: batchSize }, (_, i) => 
-          `('batch-${batch}-item-${i}')`
+          `($${i + 1})`
         ).join(', ');
+        
+        const params = Array.from({ length: batchSize }, (_, i) => 
+          `batch-${batch}-item-${i}`
+        );
         
         await DatabaseService.query(`
           INSERT INTO performance_test (data) VALUES ${values}
-        `);
+        `, params);
       }
       
       const insertTime = Date.now() - startTime;
@@ -554,30 +529,34 @@ describe('DatabaseService Application Integration', () => {
       const result = await DatabaseService.query('SELECT COUNT(*) as count FROM performance_test');
       const queryTime = Date.now() - queryStartTime;
       
-      expect(result.rows[0].count).toBe(1000);
-      expect(insertTime).toBeLessThan(5000); // Should complete within 5 seconds
-      expect(queryTime).toBeLessThan(1000); // Should complete within 1 second
+      expect(parseInt(result.rows[0].count)).toBe(1000);
+      expect(insertTime).toBeLessThan(10000); // Should complete within 10 seconds for PostgreSQL
+      expect(queryTime).toBeLessThan(2000); // Should complete within 2 seconds
     });
 
     it('should handle concurrent database operations', async () => {
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = path.join(tempDir, 'concurrent-test.db');
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       await DatabaseService.initialize({ skipMigrations: true });
       
       await DatabaseService.query(`
-        CREATE TABLE concurrent_operations (
-          id TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS concurrent_operations (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           thread_id INTEGER,
-          operation_time DATETIME DEFAULT CURRENT_TIMESTAMP
+          operation_time TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
       `);
       
       // Execute concurrent operations
       const concurrentOperations = Array.from({ length: 20 }, (_, i) =>
         DatabaseService.query(
-          'INSERT INTO concurrent_operations (id, thread_id) VALUES (?, ?)',
-          [`operation-${i}`, i % 4]
+          'INSERT INTO concurrent_operations (thread_id) VALUES ($1)',
+          [i % 4]
         )
       );
       
@@ -585,7 +564,7 @@ describe('DatabaseService Application Integration', () => {
       
       // Verify all operations completed
       const result = await DatabaseService.query('SELECT COUNT(*) as count FROM concurrent_operations');
-      expect(result.rows[0].count).toBe(20);
+      expect(parseInt(result.rows[0].count)).toBe(20);
       
       // Verify data integrity
       const threadCounts = await DatabaseService.query(`
@@ -597,69 +576,48 @@ describe('DatabaseService Application Integration', () => {
       
       expect(threadCounts.rows).toHaveLength(4);
       threadCounts.rows.forEach(row => {
-        expect(row.count).toBe(5); // Each thread should have 5 operations
+        expect(parseInt(row.count)).toBe(5); // Each thread should have 5 operations
       });
     });
   });
 
   describe('Configuration Management', () => {
-    it('should detect database type from environment', () => {
+    it('should use PostgreSQL as the only database type', () => {
       process.env.NODE_ENV = 'development';
-      delete process.env.DATABASE_TYPE;
-      
-      const config = DatabaseConfigManager.getConfig();
-      expect(config.type).toBe('sqlite');
-    });
-
-    it('should override with explicit DATABASE_TYPE', () => {
-      process.env.NODE_ENV = 'development';
-      process.env.DATABASE_TYPE = 'postgresql';
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       const config = DatabaseConfigManager.getConfig();
       expect(config.type).toBe('postgresql');
     });
 
-    it('should handle environment switching scenarios', () => {
-      // Test development environment
-      process.env.NODE_ENV = 'development';
-      delete process.env.DATABASE_TYPE;
+    it('should handle Supabase URL configuration', () => {
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
-      let config = DatabaseConfigManager.getConfig();
-      expect(config.type).toBe('sqlite');
-      
-      DatabaseConfigManager.resetConfig();
-      
-      // Test production environment
-      process.env.NODE_ENV = 'production';
+      const config = DatabaseConfigManager.getConfig();
+      expect(config.type).toBe('postgresql');
+      expect(config.postgresql?.host).toBe('db.project.supabase.co');
+      expect(config.postgresql?.database).toBe('postgres');
+    });
+
+    it('should handle individual PostgreSQL environment variables', () => {
+      delete process.env.SUPABASE_DB_URL;
       process.env.DB_HOST = 'localhost';
       process.env.DB_NAME = 'prod_db';
       process.env.DB_USER = 'prod_user';
       process.env.DB_PASSWORD = 'prod_password';
       
-      config = DatabaseConfigManager.getConfig();
-      expect(config.type).toBe('postgresql');
-      
       DatabaseConfigManager.resetConfig();
       
-      // Test explicit override
-      process.env.NODE_ENV = 'production';
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = './override.db';
-      
-      config = DatabaseConfigManager.getConfig();
-      expect(config.type).toBe('sqlite');
+      const config = DatabaseConfigManager.getConfig();
+      expect(config.type).toBe('postgresql');
+      expect(config.postgresql?.host).toBe('localhost');
+      expect(config.postgresql?.database).toBe('prod_db');
     });
 
     it('should provide comprehensive setup instructions', () => {
-      // Test SQLite instructions
-      process.env.DATABASE_TYPE = 'sqlite';
-      let instructions = DatabaseService.getSetupInstructions();
-      expect(instructions).toContain('SQLite');
-      expect(instructions).toContain('SQLITE_FILENAME');
-      
-      // Test PostgreSQL instructions
-      process.env.DATABASE_TYPE = 'postgresql';
-      instructions = DatabaseService.getSetupInstructions();
+      // Test PostgreSQL/Supabase instructions
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
+      const instructions = DatabaseService.getSetupInstructions();
       expect(instructions).toContain('PostgreSQL');
       expect(instructions).toContain('DB_HOST');
       expect(instructions).toContain('SUPABASE_DB_URL');
@@ -668,8 +626,12 @@ describe('DatabaseService Application Integration', () => {
 
   describe('Error Recovery and Resilience', () => {
     it('should recover from connection failures', async () => {
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = path.join(tempDir, 'recovery-test.db');
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       await DatabaseService.initialize({ skipMigrations: true });
       
@@ -689,23 +651,25 @@ describe('DatabaseService Application Integration', () => {
       expect(result.rows[0].test).toBe(1);
     });
 
-    it('should handle database file corruption gracefully', async () => {
-      const corruptDbPath = path.join(tempDir, 'corrupt-test.db');
-      
-      // Create a corrupted database file
-      fs.writeFileSync(corruptDbPath, 'This is not a valid SQLite database file');
-      
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = corruptDbPath;
-      
-      // Should fail to initialize with corrupted file
-      await expect(DatabaseService.initialize({ skipMigrations: true })).rejects.toThrow();
-      
-      // Should be able to recover with a new file
-      const newDbPath = path.join(tempDir, 'recovery.db');
-      process.env.SQLITE_FILENAME = newDbPath;
+    it('should handle invalid connection configuration gracefully', async () => {
+      // Test with invalid Supabase URL
+      process.env.SUPABASE_DB_URL = 'postgresql://invalid:invalid@invalid.supabase.co:5432/invalid';
       
       DatabaseService.reset();
+      
+      // Should fail to initialize with invalid configuration
+      await expect(DatabaseService.initialize({ skipMigrations: true })).rejects.toThrow();
+      
+      // Should be able to recover with valid configuration
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
+      
+      DatabaseService.reset();
+      
+      // Skip actual connection test if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+      
       await expect(DatabaseService.initialize({ skipMigrations: true })).resolves.not.toThrow();
     });
   });

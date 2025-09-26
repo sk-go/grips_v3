@@ -3,7 +3,7 @@
 /**
  * Database Inspector Utility
  * 
- * Provides comprehensive database inspection capabilities for both SQLite and PostgreSQL.
+ * Provides comprehensive database inspection capabilities for PostgreSQL/Supabase.
  * Useful for development, debugging, and monitoring.
  */
 
@@ -45,40 +45,28 @@ interface DatabaseInspectionResult {
 }
 
 class DatabaseInspector {
-  private static async getTableColumns(tableName: string, dbType: string): Promise<TableInfo['columns']> {
+  private static async getTableColumns(tableName: string): Promise<TableInfo['columns']> {
     const columns: TableInfo['columns'] = [];
     
     try {
-      if (dbType === 'sqlite') {
-        const result = await DatabaseService.query(`PRAGMA table_info(${tableName})`);
-        for (const row of result.rows) {
-          columns.push({
-            name: row.name,
-            type: row.type,
-            nullable: !row.notnull,
-            default: row.dflt_value
-          });
-        }
-      } else {
-        const result = await DatabaseService.query(`
-          SELECT 
-            column_name as name,
-            data_type as type,
-            is_nullable,
-            column_default as default_value
-          FROM information_schema.columns 
-          WHERE table_name = $1 
-          ORDER BY ordinal_position
-        `, [tableName]);
-        
-        for (const row of result.rows) {
-          columns.push({
-            name: row.name,
-            type: row.type,
-            nullable: row.is_nullable === 'YES',
-            default: row.default_value
-          });
-        }
+      const result = await DatabaseService.query(`
+        SELECT 
+          column_name as name,
+          data_type as type,
+          is_nullable,
+          column_default as default_value
+        FROM information_schema.columns 
+        WHERE table_name = $1 
+        ORDER BY ordinal_position
+      `, [tableName]);
+      
+      for (const row of result.rows) {
+        columns.push({
+          name: row.name,
+          type: row.type,
+          nullable: row.is_nullable === 'YES',
+          default: row.default_value
+        });
       }
     } catch (error) {
       logger.warn(`Failed to get columns for table ${tableName}`, { error });
@@ -87,46 +75,32 @@ class DatabaseInspector {
     return columns;
   }
 
-  private static async getTableIndexes(tableName: string, dbType: string): Promise<TableInfo['indexes']> {
+  private static async getTableIndexes(tableName: string): Promise<TableInfo['indexes']> {
     const indexes: TableInfo['indexes'] = [];
     
     try {
-      if (dbType === 'sqlite') {
-        const result = await DatabaseService.query(`PRAGMA index_list(${tableName})`);
-        for (const row of result.rows) {
-          const indexInfo = await DatabaseService.query(`PRAGMA index_info(${row.name})`);
-          const columns = indexInfo.rows.map((col: any) => col.name);
-          
-          indexes.push({
-            name: row.name,
-            columns: columns,
-            unique: row.unique === 1
-          });
-        }
-      } else {
-        const result = await DatabaseService.query(`
-          SELECT 
-            i.indexname as name,
-            i.indexdef as definition,
-            ix.indisunique as unique
-          FROM pg_indexes i
-          JOIN pg_class c ON c.relname = i.indexname
-          JOIN pg_index ix ON ix.indexrelid = c.oid
-          WHERE i.tablename = $1
-        `, [tableName]);
+      const result = await DatabaseService.query(`
+        SELECT 
+          i.indexname as name,
+          i.indexdef as definition,
+          ix.indisunique as unique
+        FROM pg_indexes i
+        JOIN pg_class c ON c.relname = i.indexname
+        JOIN pg_index ix ON ix.indexrelid = c.oid
+        WHERE i.tablename = $1
+      `, [tableName]);
+      
+      for (const row of result.rows) {
+        // Parse column names from index definition (simplified)
+        const columns = row.definition.match(/\(([^)]+)\)/)?.[1]
+          .split(',')
+          .map((col: string) => col.trim()) || [];
         
-        for (const row of result.rows) {
-          // Parse column names from index definition (simplified)
-          const columns = row.definition.match(/\(([^)]+)\)/)?.[1]
-            .split(',')
-            .map((col: string) => col.trim()) || [];
-          
-          indexes.push({
-            name: row.name,
-            columns: columns,
-            unique: row.unique
-          });
-        }
+        indexes.push({
+          name: row.name,
+          columns: columns,
+          unique: row.unique
+        });
       }
     } catch (error) {
       logger.warn(`Failed to get indexes for table ${tableName}`, { error });
@@ -135,16 +109,12 @@ class DatabaseInspector {
     return indexes;
   }
 
-  private static async getTableSize(tableName: string, dbType: string): Promise<string | undefined> {
+  private static async getTableSize(tableName: string): Promise<string | undefined> {
     try {
-      if (dbType === 'postgresql') {
-        const result = await DatabaseService.query(`
-          SELECT pg_size_pretty(pg_total_relation_size($1)) as size
-        `, [tableName]);
-        return result.rows[0]?.size;
-      }
-      // SQLite doesn't have per-table size info easily available
-      return undefined;
+      const result = await DatabaseService.query(`
+        SELECT pg_size_pretty(pg_total_relation_size($1)) as size
+      `, [tableName]);
+      return result.rows[0]?.size;
     } catch (error) {
       logger.warn(`Failed to get size for table ${tableName}`, { error });
       return undefined;
@@ -159,11 +129,10 @@ class DatabaseInspector {
       await DatabaseService.initialize({ skipMigrations: true });
       
       const connectionTime = Date.now() - startTime;
-      const dbType = DatabaseService.getDatabaseType();
       const config = DatabaseService.getConfigSummary() as any;
       
       const result: DatabaseInspectionResult = {
-        type: dbType,
+        type: 'postgresql',
         version: '',
         size: '',
         tables: [],
@@ -178,48 +147,24 @@ class DatabaseInspector {
         configuration: config
       };
 
-      // Get database version and size
+      // Get PostgreSQL database version and size
       const queryStart = Date.now();
-      if (dbType === 'sqlite') {
-        const versionResult = await DatabaseService.query('SELECT sqlite_version() as version');
-        result.version = `SQLite ${versionResult.rows[0].version}`;
-        
-        // Get database file size if applicable
-        if (config.sqlite?.filename && config.sqlite.filename !== ':memory:') {
-          const fs = require('fs');
-          if (fs.existsSync(config.sqlite.filename)) {
-            const stats = fs.statSync(config.sqlite.filename);
-            result.size = `${(stats.size / 1024 / 1024).toFixed(2)} MB`;
-          }
-        } else {
-          result.size = 'In-memory database';
-        }
-      } else {
-        const versionResult = await DatabaseService.query('SELECT version()');
-        const version = versionResult.rows[0].version;
-        result.version = version.split(' ')[0] + ' ' + version.split(' ')[1];
-        
-        const sizeResult = await DatabaseService.query(`
-          SELECT pg_size_pretty(pg_database_size(current_database())) as size
-        `);
-        result.size = sizeResult.rows[0].size;
-      }
+      const versionResult = await DatabaseService.query('SELECT version()');
+      const version = versionResult.rows[0].version;
+      result.version = version.split(' ')[0] + ' ' + version.split(' ')[1];
+      
+      const sizeResult = await DatabaseService.query(`
+        SELECT pg_size_pretty(pg_database_size(current_database())) as size
+      `);
+      result.size = sizeResult.rows[0].size;
       result.performance.queryTime = Date.now() - queryStart;
 
       // Get migration information
       try {
-        let migrationTableQuery: string;
-        if (dbType === 'sqlite') {
-          migrationTableQuery = `
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='schema_migrations'
-          `;
-        } else {
-          migrationTableQuery = `
-            SELECT tablename FROM pg_tables 
-            WHERE tablename = 'schema_migrations'
-          `;
-        }
+        const migrationTableQuery = `
+          SELECT tablename FROM pg_tables 
+          WHERE tablename = 'schema_migrations'
+        `;
         
         const migrationTableResult = await DatabaseService.query(migrationTableQuery);
         if (migrationTableResult.rows.length > 0) {
@@ -243,21 +188,12 @@ class DatabaseInspector {
         logger.warn('Failed to get migration information', { error });
       }
 
-      // Get table information
-      let tableQuery: string;
-      if (dbType === 'sqlite') {
-        tableQuery = `
-          SELECT name FROM sqlite_master 
-          WHERE type='table' AND name NOT LIKE 'sqlite_%'
-          ORDER BY name
-        `;
-      } else {
-        tableQuery = `
-          SELECT tablename as name FROM pg_tables 
-          WHERE schemaname = 'public'
-          ORDER BY tablename
-        `;
-      }
+      // Get PostgreSQL table information
+      const tableQuery = `
+        SELECT tablename as name FROM pg_tables 
+        WHERE schemaname = 'public'
+        ORDER BY tablename
+      `;
       
       const tablesResult = await DatabaseService.query(tableQuery);
       
@@ -267,9 +203,9 @@ class DatabaseInspector {
           const countResult = await DatabaseService.query(`SELECT COUNT(*) as count FROM ${table.name}`);
           const rowCount = parseInt(countResult.rows[0].count, 10);
           
-          const columns = await this.getTableColumns(table.name, dbType);
-          const indexes = await this.getTableIndexes(table.name, dbType);
-          const size = await this.getTableSize(table.name, dbType);
+          const columns = await this.getTableColumns(table.name);
+          const indexes = await this.getTableIndexes(table.name);
+          const size = await this.getTableSize(table.name);
           
           result.tables.push({
             name: table.name,

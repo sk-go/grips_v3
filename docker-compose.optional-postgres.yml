@@ -1,13 +1,14 @@
 version: '3.8'
 
-# Optional PostgreSQL service for development
-# Use this when you want to test with PostgreSQL instead of SQLite
+# Optional PostgreSQL service for local testing only
+# This is NOT recommended for development - use Supabase for all development work
+# This service is only provided for isolated testing scenarios
 # 
 # Usage:
-#   # Start with PostgreSQL
+#   # Start with local PostgreSQL for testing (NOT recommended for development)
 #   docker-compose -f docker-compose.yml -f docker-compose.optional-postgres.yml up
 #   
-#   # Start without PostgreSQL (SQLite only)
+#   # Recommended: Start with Redis only and use Supabase for database
 #   docker-compose up redis
 
 services:

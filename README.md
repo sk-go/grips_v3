@@ -17,7 +17,7 @@ AI-powered relationship management platform for insurance agents that provides a
 - npm or yarn
 - Docker (optional, for PostgreSQL development)
 
-**Database**: The application automatically uses SQLite for development (no setup required) and PostgreSQL for production.
+**Database**: The application uses Supabase (PostgreSQL) for all environments including development, testing, and production.
 
 ## Quick Start (Development)
 
@@ -27,43 +27,49 @@ git clone <repository-url>
 cd relationship-care-platform
 ```
 
-2. Set up development environment:
+2. Set up environment variables:
 ```bash
-npm install
-npm run setup:dev
+cp .env.example .env
+# Edit .env with your Supabase configuration
 ```
 
-3. Start the application:
+3. Configure Supabase connection (choose one approach):
+
+**Option A: Supabase Client (Recommended)**
 ```bash
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
+```
+
+**Option B: Direct PostgreSQL Connection**
+```bash
+SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
+```
+
+4. Install dependencies and start:
+```bash
+npm install
 npm run dev
 ```
 
-That's it! The application will automatically:
-- Create a SQLite database at `./data/development.db`
+The application will automatically:
+- Connect to your Supabase database
 - Run all migrations to set up the schema
 - Be ready for development at `http://localhost:3000`
 
 ## Production Setup
 
-For production deployment, you'll need PostgreSQL:
+For production deployment:
 
 1. Set up environment variables:
 ```bash
 cp .env.example .env
-# Edit .env with your PostgreSQL/Supabase configuration
+# Edit .env with your Supabase configuration
 ```
 
-2. Configure database:
+2. Configure Supabase database:
 ```bash
-# Option 1: Use Supabase (recommended)
 SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
-
-# Option 2: Use your own PostgreSQL
-DATABASE_TYPE=postgresql
-DB_HOST=your-host
-DB_NAME=relationship_care_platform
-DB_USER=your-user
-DB_PASSWORD=your-password
 ```
 
 3. Set up Redis:
@@ -83,25 +89,19 @@ The server will start on `http://localhost:3000` (or the port specified in your 
 
 ## Database Configuration
 
-The application supports flexible database backends:
+The application uses Supabase (PostgreSQL) for all environments:
 
-### Development (SQLite)
-- **Automatic**: Uses SQLite by default in development
-- **No setup required**: Database file created automatically
-- **Location**: `./data/development.db`
-- **Benefits**: No server setup, no authentication, portable
-
-### Production (PostgreSQL)
-- **Supabase** (recommended): Managed PostgreSQL with built-in features
-- **Self-hosted**: Your own PostgreSQL instance
-- **Benefits**: Full concurrent access, production-ready, scalable
+### Supabase Configuration
+- **Managed PostgreSQL**: Built-in features and scalability
+- **All Environments**: Development, testing, and production
+- **Benefits**: Full concurrent access, production-ready, real-time features
 
 ### Configuration Examples
 
-**Development (automatic)**:
+**Development with Supabase**:
 ```bash
 NODE_ENV=development
-# SQLite used automatically, no additional config needed
+SUPABASE_DB_URL=postgresql://postgres:[dev-password]@[dev-project-ref].pooler.supabase.com:5432/postgres
 ```
 
 **Production with Supabase**:
@@ -110,14 +110,14 @@ NODE_ENV=production
 SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
 ```
 
-**Production with PostgreSQL**:
+**Alternative PostgreSQL Configuration**:
 ```bash
-NODE_ENV=production
-DATABASE_TYPE=postgresql
-DB_HOST=localhost
-DB_NAME=relationship_care_platform
-DB_USER=username
-DB_PASSWORD=password
+DB_HOST=your-project-ref.pooler.supabase.com
+DB_PORT=5432
+DB_NAME=postgres
+DB_USER=postgres
+DB_PASSWORD=your-password
+DB_SSL=true
 ```
 
 ### Database Commands
@@ -139,13 +139,11 @@ npm run db:inspect          # Full database inspection report
 npm run db:inspect:table    # Inspect specific table (usage: npm run db:inspect:table users)
 npm run db:inspect:json     # Get inspection data as JSON
 
-# Data Migration
-npm run db:export           # Export SQLite data for migration
+# Data Management
+npm run db:backup           # Backup database data
 
 # Docker Services
-npm run docker:dev          # Start Redis only (SQLite development)
-npm run docker:dev:postgres # Start Redis + PostgreSQL
-npm run docker:dev:full     # Start all services
+npm run docker:dev          # Start Redis for development
 npm run docker:stop         # Stop all Docker services
 ```
 
@@ -153,36 +151,17 @@ For detailed setup instructions, see [docs/database-setup.md](docs/database-setu
 
 ## Docker Development
 
-The application supports flexible Docker configurations:
+The application uses Docker for Redis caching:
 
-### SQLite Development (Minimal Docker)
+### Development Setup
 ```bash
-# Start only Redis (SQLite is file-based)
+# Start Redis for caching
 npm run docker:dev
 # or
 docker-compose up -d redis
 
-npm run dev  # Uses SQLite automatically
-```
-
-### PostgreSQL Development
-```bash
-# Start Redis + PostgreSQL
-npm run docker:dev:postgres
-# or
-docker-compose --profile postgres up -d
-
-# Configure environment for PostgreSQL
-export DATABASE_TYPE=postgresql
-npm run dev
-```
-
-### Full Development Environment
-```bash
-# Start all services
-npm run docker:dev:full
-# or
-docker-compose --profile full up -d
+# Configure Supabase connection
+export SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
 
 npm run dev
 ```
@@ -219,15 +198,14 @@ For detailed Docker setup instructions, see [docs/docker-setup.md](docs/docker-s
 ### Database Configuration
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_TYPE` | Database type (sqlite/postgresql) | Auto-detected |
-| `SQLITE_FILENAME` | SQLite database file path | `./data/development.db` |
-| `SQLITE_WAL` | Enable SQLite WAL mode | `true` |
 | `SUPABASE_DB_URL` | Supabase connection string | - |
 | `DB_HOST` | PostgreSQL host | `localhost` |
 | `DB_PORT` | PostgreSQL port | `5432` |
-| `DB_NAME` | PostgreSQL database name | - |
-| `DB_USER` | PostgreSQL username | - |
+| `DB_NAME` | PostgreSQL database name | `postgres` |
+| `DB_USER` | PostgreSQL username | `postgres` |
 | `DB_PASSWORD` | PostgreSQL password | - |
+| `DB_SSL` | Enable SSL connection | `true` |
+| `DB_POOL_MAX` | Maximum connection pool size | `20` |
 
 ### Rate Limiting
 | Variable | Description | Default |

@@ -1,19 +1,20 @@
 import { DatabaseService } from '../../services/database/DatabaseService';
 import { DatabaseConfigManager } from '../../services/database/config';
-import fs from 'fs';
-import path from 'path';
 
-describe('DatabaseService Integration', () => {
-  const testDbPath = './test-data/integration-test.db';
-
+describe('DatabaseService Integration - Supabase Only', () => {
   beforeEach(() => {
     // Reset service state
     DatabaseService.reset();
-
-    // Clean up test database
-    if (fs.existsSync(testDbPath)) {
-      fs.unlinkSync(testDbPath);
-    }
+    
+    // Clear environment variables
+    delete process.env.SUPABASE_DB_URL;
+    delete process.env.DATABASE_URL;
+    delete process.env.DB_HOST;
+    delete process.env.DB_PORT;
+    delete process.env.DB_NAME;
+    delete process.env.DB_USER;
+    delete process.env.DB_PASSWORD;
+    delete process.env.DB_SSL;
   });
 
   afterEach(async () => {
@@ -22,86 +23,72 @@ describe('DatabaseService Integration', () => {
     } catch (error) {
       // Ignore cleanup errors
     }
-
-    // Clean up test database
-    if (fs.existsSync(testDbPath)) {
-      fs.unlinkSync(testDbPath);
-    }
   });
 
-  describe('SQLite Configuration', () => {
+  describe('Supabase Configuration', () => {
     beforeEach(() => {
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = testDbPath;
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.pooler.supabase.com:5432/postgres';
     });
 
     afterEach(() => {
-      delete process.env.DATABASE_TYPE;
-      delete process.env.SQLITE_FILENAME;
+      delete process.env.SUPABASE_DB_URL;
     });
 
-    it('should initialize with SQLite adapter', async () => {
-      await DatabaseService.initialize();
+    it('should initialize with PostgreSQL adapter for Supabase', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
 
-      expect(DatabaseService.getDatabaseType()).toBe('sqlite');
+      await DatabaseService.initialize({ skipMigrations: true });
+
+      expect(DatabaseService.getDatabaseType()).toBe('postgresql');
 
       // Test basic query
       const result = await DatabaseService.query('SELECT 1 as test');
       expect(result.rows[0].test).toBe(1);
     });
 
-    it('should provide configuration summary', async () => {
-      await DatabaseService.initialize();
-
+    it('should provide configuration summary', () => {
       const summary = DatabaseService.getConfigSummary();
-      expect(summary).toHaveProperty('type', 'sqlite');
+      expect(summary).toHaveProperty('type', 'postgresql');
       expect(summary).toHaveProperty('config');
+      expect((summary as any).config.ssl).toBe(true); // Supabase always uses SSL
     });
 
-    it('should validate configuration', async () => {
+    it('should validate Supabase configuration', async () => {
       const validation = DatabaseService.validateConfiguration();
 
       expect(validation.isValid).toBe(true);
       expect(validation.errors).toHaveLength(0);
     });
 
-    it('should provide setup instructions', () => {
+    it('should provide Supabase setup instructions', () => {
       const instructions = DatabaseService.getSetupInstructions();
 
-      expect(instructions).toContain('SQLite Configuration');
-      expect(instructions).toContain(testDbPath);
+      expect(instructions).toContain('PostgreSQL');
+      expect(instructions).toContain('Supabase');
+      expect(instructions).toContain('SUPABASE_DB_URL');
     });
 
     it('should perform health check', async () => {
-      await DatabaseService.initialize();
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
+
+      await DatabaseService.initialize({ skipMigrations: true });
 
       const health = await DatabaseService.healthCheck();
 
       expect(health.status).toBe('healthy');
-      expect(health.type).toBe('sqlite');
+      expect(health.type).toBe('postgresql');
       expect(health.timestamp).toBeInstanceOf(Date);
     });
   });
 
   describe('Configuration Validation', () => {
-    it('should detect invalid SQLite configuration', () => {
-      // Reset config cache first
-      DatabaseService.reset();
-
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = '';
-
-      const validation = DatabaseService.validateConfiguration();
-
-      expect(validation.isValid).toBe(false);
-      expect(validation.errors).toContain('SQLite filename is required but not provided.');
-
-      delete process.env.DATABASE_TYPE;
-      delete process.env.SQLITE_FILENAME;
-    });
-
     it('should detect invalid PostgreSQL configuration', () => {
-      process.env.DATABASE_TYPE = 'postgresql';
       process.env.DB_HOST = '';
       delete process.env.DB_NAME;
       delete process.env.DB_USER;
@@ -114,12 +101,10 @@ describe('DatabaseService Integration', () => {
       expect(validation.isValid).toBe(false);
       expect(validation.errors.length).toBeGreaterThan(0);
 
-      delete process.env.DATABASE_TYPE;
       delete process.env.DB_HOST;
     });
 
     it('should provide helpful error messages for missing configuration', async () => {
-      process.env.DATABASE_TYPE = 'postgresql';
       delete process.env.DB_HOST;
       delete process.env.DB_NAME;
       delete process.env.DB_USER;
@@ -134,27 +119,44 @@ describe('DatabaseService Integration', () => {
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toContain('Database configuration invalid');
       }
+    });
 
-      delete process.env.DATABASE_TYPE;
+    it('should validate Supabase connection string format', () => {
+      process.env.SUPABASE_DB_URL = 'invalid-connection-string';
+
+      const validation = DatabaseService.validateConfiguration();
+
+      expect(validation.isValid).toBe(false);
+      expect(validation.errors.some(error => error.includes('Invalid'))).toBe(true);
+
+      delete process.env.SUPABASE_DB_URL;
     });
   });
 
-  describe('Environment-based Defaults', () => {
-    it('should default to SQLite in development', () => {
+  describe('PostgreSQL-only Configuration', () => {
+    it('should use PostgreSQL in all environments', () => {
       process.env.NODE_ENV = 'development';
-      delete process.env.DATABASE_TYPE;
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.pooler.supabase.com:5432/postgres';
 
       const config = DatabaseConfigManager.getConfig();
-      expect(config.type).toBe('sqlite');
+      expect(config.type).toBe('postgresql');
 
       delete process.env.NODE_ENV;
+      delete process.env.SUPABASE_DB_URL;
     });
 
-    it('should default to PostgreSQL in production', () => {
+    it('should use PostgreSQL in production', () => {
       process.env.NODE_ENV = 'production';
-      delete process.env.DATABASE_TYPE;
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.pooler.supabase.com:5432/postgres';
 
-      // Set minimal PostgreSQL config to avoid validation errors
+      const config = DatabaseConfigManager.getConfig();
+      expect(config.type).toBe('postgresql');
+
+      delete process.env.NODE_ENV;
+      delete process.env.SUPABASE_DB_URL;
+    });
+
+    it('should handle individual PostgreSQL environment variables', () => {
       process.env.DB_HOST = 'localhost';
       process.env.DB_NAME = 'test';
       process.env.DB_USER = 'test';
@@ -163,50 +165,39 @@ describe('DatabaseService Integration', () => {
       const config = DatabaseConfigManager.getConfig();
       expect(config.type).toBe('postgresql');
 
-      delete process.env.NODE_ENV;
       delete process.env.DB_HOST;
       delete process.env.DB_NAME;
       delete process.env.DB_USER;
       delete process.env.DB_PASSWORD;
     });
-
-    it('should allow explicit override of environment defaults', () => {
-      process.env.NODE_ENV = 'production';
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = testDbPath;
-
-      const config = DatabaseConfigManager.getConfig();
-      expect(config.type).toBe('sqlite');
-
-      delete process.env.NODE_ENV;
-      delete process.env.DATABASE_TYPE;
-      delete process.env.SQLITE_FILENAME;
-    });
   });
 
-  describe('Backward Compatibility', () => {
+  describe('API Compatibility', () => {
     beforeEach(() => {
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = testDbPath;
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.pooler.supabase.com:5432/postgres';
     });
 
     afterEach(() => {
-      delete process.env.DATABASE_TYPE;
-      delete process.env.SQLITE_FILENAME;
+      delete process.env.SUPABASE_DB_URL;
     });
 
-    it('should maintain the same API as legacy DatabaseService', async () => {
-      await DatabaseService.initialize();
+    it('should maintain the same API interface', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
+      }
 
-      // Test that all legacy methods exist and work
+      await DatabaseService.initialize({ skipMigrations: true });
+
+      // Test that all methods exist and work
       expect(typeof DatabaseService.query).toBe('function');
       expect(typeof DatabaseService.getClient).toBe('function');
       expect(typeof DatabaseService.close).toBe('function');
       expect(typeof DatabaseService.initialize).toBe('function');
 
       // Test basic query functionality
-      const result = await DatabaseService.query('SELECT 1 as legacy_test');
-      expect(result.rows[0].legacy_test).toBe(1);
+      const result = await DatabaseService.query('SELECT 1 as test');
+      expect(result.rows[0].test).toBe(1);
 
       // Test client acquisition
       const client = await DatabaseService.getClient();
@@ -217,18 +208,18 @@ describe('DatabaseService Integration', () => {
       }
     });
 
-    it('should create legacy schema when needed', async () => {
-      await DatabaseService.initialize();
-
-      // Check that basic tables exist (created by legacy schema or migrations)
-      try {
-        await DatabaseService.query('SELECT COUNT(*) FROM users');
-        // If this doesn't throw, the table exists
-        expect(true).toBe(true);
-      } catch (error) {
-        // Table might not exist if migrations haven't run, which is okay
-        expect(true).toBe(true);
+    it('should handle PostgreSQL native features', async () => {
+      // Skip if no test database available
+      if (!process.env.TEST_DB_HOST && !process.env.CI && !process.env.SUPABASE_DB_URL) {
+        return;
       }
+
+      await DatabaseService.initialize({ skipMigrations: true });
+
+      // Test PostgreSQL-specific query
+      const result = await DatabaseService.query('SELECT NOW() as current_time, version() as pg_version');
+      expect(result.rows[0].current_time).toBeDefined();
+      expect(result.rows[0].pg_version).toContain('PostgreSQL');
     });
   });
 });

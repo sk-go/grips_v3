@@ -24,28 +24,26 @@ router.get('/detailed', asyncHandler(async (_req: Request, res: Response) => {
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || 'development',
     services: {
-      database: { status: 'unknown', responseTime: 0, type: 'unknown' },
+      database: { status: 'unknown', responseTime: 0, type: 'postgresql' },
       redis: { status: 'unknown', responseTime: 0 }
     }
   };
 
-  // Check database connection with type detection
+  // Check PostgreSQL/Supabase database connection
   try {
     const dbStart = Date.now();
     await DatabaseService.query('SELECT 1');
-    const dbType = DatabaseService.getDatabaseType();
     healthChecks.services.database = {
       status: 'healthy',
       responseTime: Date.now() - dbStart,
-      type: dbType
+      type: 'postgresql'
     };
   } catch (error: any) {
     logger.error('Database health check failed', { error: error.message });
-    const dbType = DatabaseService.getDatabaseType();
     healthChecks.services.database = {
       status: 'unhealthy',
       responseTime: 0,
-      type: dbType,
+      type: 'postgresql',
       error: error.message
     } as any;
     healthChecks.status = 'degraded';
@@ -92,7 +90,7 @@ router.get('/ready', asyncHandler(async (_req: Request, res: Response) => {
       status: 'ready',
       timestamp: new Date().toISOString(),
       database: {
-        type: DatabaseService.getDatabaseType()
+        type: 'postgresql'
       }
     });
   } catch (error: any) {
@@ -102,7 +100,7 @@ router.get('/ready', asyncHandler(async (_req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
       error: error.message,
       database: {
-        type: DatabaseService.getDatabaseType()
+        type: 'postgresql'
       }
     });
   }
@@ -123,10 +121,9 @@ router.get('/database', asyncHandler(async (_req: Request, res: Response) => {
     const configSummary = DatabaseService.getConfigSummary();
     const validation = DatabaseService.validateConfiguration();
     const dbHealth = await DatabaseService.healthCheck();
-    const dbType = DatabaseService.getDatabaseType();
     
     res.json({
-      type: dbType,
+      type: 'postgresql',
       configuration: configSummary,
       validation: validation,
       health: dbHealth,
@@ -137,16 +134,14 @@ router.get('/database', asyncHandler(async (_req: Request, res: Response) => {
     
     // Still try to get setup instructions even if config fails
     let setupInstructions = '';
-    let dbType = 'unknown';
     try {
       setupInstructions = DatabaseService.getSetupInstructions();
-      dbType = DatabaseService.getDatabaseType();
     } catch (e) {
-      setupInstructions = 'Unable to generate setup instructions';
+      setupInstructions = 'Unable to generate Supabase setup instructions';
     }
     
     res.status(500).json({
-      type: dbType,
+      type: 'postgresql',
       error: error.message,
       setupInstructions: setupInstructions,
       timestamp: new Date().toISOString()
@@ -161,7 +156,7 @@ router.get('/database/detailed', asyncHandler(async (_req: Request, res: Respons
       status: 'healthy',
       timestamp: new Date().toISOString(),
       database: {
-        type: '',
+        type: 'postgresql',
         connected: false,
         version: '',
         size: ''
@@ -173,7 +168,7 @@ router.get('/database/detailed', asyncHandler(async (_req: Request, res: Respons
       },
       tables: {
         count: 0,
-        details: [] as Array<{ name: string; rows: number; size?: string }>
+        details: [] as Array<{ name: string; rows: number; size: string }>
       },
       performance: {
         connectionTime: 0,
@@ -183,10 +178,6 @@ router.get('/database/detailed', asyncHandler(async (_req: Request, res: Respons
       recommendations: [] as string[]
     };
 
-    // Get database configuration
-    const config = DatabaseService.getConfigSummary() as any;
-    healthResult.database.type = config.type;
-
     // Test connection and get basic info
     const connectionStart = Date.now();
     const client = await DatabaseService.getClient();
@@ -194,44 +185,21 @@ router.get('/database/detailed', asyncHandler(async (_req: Request, res: Respons
     healthResult.database.connected = true;
 
     try {
-      // Get database version and size
-      if (config.type === 'sqlite') {
-        const versionResult = await client.query('SELECT sqlite_version() as version');
-        healthResult.database.version = `SQLite ${versionResult.rows[0].version}`;
-        
-        // Get database file size if applicable
-        const sqliteConfig = config.sqlite;
-        if (sqliteConfig?.filename && sqliteConfig.filename !== ':memory:') {
-          const fs = require('fs');
-          if (fs.existsSync(sqliteConfig.filename)) {
-            const stats = fs.statSync(sqliteConfig.filename);
-            healthResult.database.size = `${(stats.size / 1024 / 1024).toFixed(2)} MB`;
-          }
-        }
-      } else {
-        const versionResult = await client.query('SELECT version()');
-        const version = versionResult.rows[0].version;
-        healthResult.database.version = version.split(' ')[0] + ' ' + version.split(' ')[1];
-        
-        const sizeResult = await client.query(`
-          SELECT pg_size_pretty(pg_database_size(current_database())) as size
-        `);
-        healthResult.database.size = sizeResult.rows[0].size;
-      }
+      // Get PostgreSQL database version and size
+      const versionResult = await client.query('SELECT version()');
+      const version = versionResult.rows[0].version;
+      healthResult.database.version = version.split(' ')[0] + ' ' + version.split(' ')[1];
+      
+      const sizeResult = await client.query(`
+        SELECT pg_size_pretty(pg_database_size(current_database())) as size
+      `);
+      healthResult.database.size = sizeResult.rows[0].size;
 
       // Check migrations
-      let migrationTableQuery: string;
-      if (config.type === 'sqlite') {
-        migrationTableQuery = `
-          SELECT name FROM sqlite_master 
-          WHERE type='table' AND name='schema_migrations'
-        `;
-      } else {
-        migrationTableQuery = `
-          SELECT tablename FROM pg_tables 
-          WHERE tablename = 'schema_migrations'
-        `;
-      }
+      const migrationTableQuery = `
+        SELECT tablename FROM pg_tables 
+        WHERE tablename = 'schema_migrations'
+      `;
       
       const migrationTableResult = await client.query(migrationTableQuery);
       if (migrationTableResult.rows.length > 0) {
@@ -252,38 +220,26 @@ router.get('/database/detailed', asyncHandler(async (_req: Request, res: Respons
         }
       }
 
-      // Get table information
-      let tableQuery: string;
-      if (config.type === 'sqlite') {
-        tableQuery = `
-          SELECT name FROM sqlite_master 
-          WHERE type='table' AND name NOT LIKE 'sqlite_%'
-          ORDER BY name
-        `;
-      } else {
-        tableQuery = `
-          SELECT tablename as name FROM pg_tables 
-          WHERE schemaname = 'public'
-          ORDER BY tablename
-        `;
-      }
+      // Get PostgreSQL table information
+      const tableQuery = `
+        SELECT tablename as name FROM pg_tables 
+        WHERE schemaname = 'public'
+        ORDER BY tablename
+      `;
       
       const tablesResult = await client.query(tableQuery);
       healthResult.tables.count = tablesResult.rows.length;
 
-      // Get row counts for each table
+      // Get row counts and sizes for each table
       for (const table of tablesResult.rows) {
         try {
           const countResult = await client.query(`SELECT COUNT(*) as count FROM ${table.name}`);
           const rowCount = parseInt(countResult.rows[0].count, 10);
           
-          let size: string | undefined;
-          if (config.type === 'postgresql') {
-            const sizeResult = await client.query(`
-              SELECT pg_size_pretty(pg_total_relation_size($1)) as size
-            `, [table.name]);
-            size = sizeResult.rows[0].size;
-          }
+          const sizeResult = await client.query(`
+            SELECT pg_size_pretty(pg_total_relation_size($1)) as size
+          `, [table.name]);
+          const size = sizeResult.rows[0].size;
           
           healthResult.tables.details.push({
             name: table.name,
@@ -321,13 +277,13 @@ router.get('/database/detailed', asyncHandler(async (_req: Request, res: Respons
       if (healthResult.performance.connectionTime > 5000) {
         healthResult.status = 'warning';
         healthResult.issues.push('Slow database connection (>5s)');
-        healthResult.recommendations.push('Check network connectivity and database server performance');
+        healthResult.recommendations.push('Check network connectivity and Supabase server performance');
       }
       
       if (healthResult.performance.queryTime > 1000) {
         healthResult.status = 'warning';
         healthResult.issues.push('Slow query performance (>1s)');
-        healthResult.recommendations.push('Consider database optimization or check server resources');
+        healthResult.recommendations.push('Consider database optimization or check Supabase server resources');
       }
 
     } finally {
@@ -342,19 +298,18 @@ router.get('/database/detailed', asyncHandler(async (_req: Request, res: Respons
 
   } catch (error: any) {
     logger.error('Detailed database health check failed', { error: error.message });
-    const dbType = DatabaseService.getDatabaseType();
     res.status(503).json({
       status: 'error',
       timestamp: new Date().toISOString(),
       error: error.message,
       database: {
-        type: dbType,
+        type: 'postgresql',
         connected: false
       },
       recommendations: [
-        'Check database configuration',
-        'Ensure database server is running',
-        'Verify connection credentials'
+        'Check Supabase configuration',
+        'Ensure Supabase project is running',
+        'Verify connection credentials and network access'
       ]
     });
   }

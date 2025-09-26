@@ -27,7 +27,9 @@ export class PostgreSQLAdapter extends BaseAdapter {
       database: this.config.database,
       user: this.config.user,
       password: this.config.password,
-      ssl: this.config.ssl,
+      ssl: this.config.ssl ? {
+        rejectUnauthorized: false // Accept self-signed certificates for Supabase
+      } : false,
       max: this.config.max || 20,
       idleTimeoutMillis: this.config.idleTimeoutMillis || 30000,
       connectionTimeoutMillis: this.config.connectionTimeoutMillis || 2000,
@@ -90,10 +92,14 @@ export class PostgreSQLAdapter extends BaseAdapter {
         errorMessage = 'Connection timeout';
         suggestions.push('Check network connectivity');
         suggestions.push('For Supabase, try increasing DB_CONNECTION_TIMEOUT');
-      } else if (err.message?.includes('SSL')) {
+      } else if (err.message?.includes('SSL') || err.message?.includes('certificate')) {
         errorMessage = 'SSL connection error';
         suggestions.push('For Supabase, ensure SSL is enabled');
         suggestions.push('Check SSL certificate configuration');
+      } else if (err.code === 'SELF_SIGNED_CERT_IN_CHAIN' || err.message?.includes('self-signed certificate')) {
+        errorMessage = 'SSL certificate validation failed';
+        suggestions.push('This is usually fixed automatically for Supabase connections');
+        suggestions.push('If the issue persists, check your Supabase project settings');
       }
 
       logger.error(errorMessage, {
@@ -163,6 +169,19 @@ export class PostgreSQLAdapter extends BaseAdapter {
       },
       release: () => client.release()
     };
+  }
+
+  /**
+   * Get the underlying PostgreSQL pool for services that need direct access
+   */
+  getPool(): Pool {
+    this.ensureInitialized();
+    
+    if (!this.pool) {
+      throw new Error('PostgreSQL pool not initialized');
+    }
+    
+    return this.pool;
   }
 
   async close(): Promise<void> {

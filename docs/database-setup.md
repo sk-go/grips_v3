@@ -1,90 +1,81 @@
 # Database Setup Guide
 
-This guide explains how to set up the database for the Relationship Care Platform in different environments.
+This guide explains how to set up Supabase database for the Relationship Care Platform in different environments.
 
 ## Quick Start (Development)
 
-The application automatically uses SQLite for development, so you can get started immediately:
+The application uses Supabase for all environments. To get started:
 
-1. **Clone the repository**
-2. **Install dependencies**: `npm install`
-3. **Start the application**: `npm run dev`
+1. **Create a Supabase project** at [supabase.com](https://supabase.com)
+2. **Clone the repository**
+3. **Install dependencies**: `npm install`
+4. **Configure environment**: Copy `.env.example` to `.env` and add your Supabase URL
+5. **Start the application**: `npm run dev`
 
 The application will automatically:
-- Create a SQLite database at `./data/development.db`
+- Connect to your Supabase database
 - Run all migrations to set up the schema
 - Be ready for development
 
-No additional database setup required!
-
-📖 **See [Quick Start Guide - SQLite Development](./quick-start-sqlite.md) for detailed setup instructions.**
+📖 **See [Supabase Production Deployment Guide](./supabase-deployment.md) for detailed setup instructions.**
 
 ## Database Configuration
 
-### Automatic Environment Detection
+### Supabase Configuration
 
-The system automatically selects the appropriate database based on your environment:
+The system uses Supabase (PostgreSQL) for all environments:
 
-- **Development** (`NODE_ENV=development`): SQLite (default)
-- **Production** (`NODE_ENV=production`): PostgreSQL (default)
+- **Development**: Supabase development project
+- **Testing**: Supabase test project or separate database
+- **Production**: Supabase production project
 
-### Manual Override
+### Connection Configuration
 
-You can override the automatic selection by setting `DATABASE_TYPE`:
+Configure your Supabase connection using environment variables:
 
 ```bash
-# Force SQLite in any environment
-DATABASE_TYPE=sqlite
-
-# Force PostgreSQL in any environment  
-DATABASE_TYPE=postgresql
-```
-
-## SQLite Configuration (Development)
-
-### Default Setup
-```bash
-# File-based database (recommended for development)
-SQLITE_FILENAME=./data/development.db
-SQLITE_WAL=true
-```
-
-### Alternative Configurations
-```bash
-# In-memory database (for testing, data lost on restart)
-SQLITE_FILENAME=:memory:
-
-# Custom location
-SQLITE_FILENAME=./my-custom-path/app.db
-
-# Disable WAL mode (if you encounter issues)
-SQLITE_WAL=false
-```
-
-### SQLite Benefits for Development
-- ✅ No server setup required
-- ✅ No authentication needed
-- ✅ Portable database file
-- ✅ Fast for development workloads
-- ✅ Same SQL syntax as PostgreSQL (with compatibility layer)
-
-## PostgreSQL Configuration (Production)
-
-### Standard PostgreSQL
-```bash
-DATABASE_TYPE=postgresql
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=relationship_care_platform
-DB_USER=your_username
-DB_PASSWORD=your_password
-DB_SSL=false
-```
-
-### Supabase (Recommended for Production)
-```bash
-# Use Supabase connection string (overrides individual DB_* variables)
+# Primary method (recommended)
 SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
+
+# Alternative individual variables
+DB_HOST=[project-ref].pooler.supabase.com
+DB_PORT=5432
+DB_NAME=postgres
+DB_USER=postgres
+DB_PASSWORD=[your-password]
+DB_SSL=true
+```
+
+## Supabase Configuration (All Environments)
+
+### Development Setup
+```bash
+# Development project
+SUPABASE_DB_URL=postgresql://postgres:[dev-password]@[dev-project-ref].pooler.supabase.com:5432/postgres
+NODE_ENV=development
+```
+
+### Testing Setup
+```bash
+# Test project or separate database
+SUPABASE_DB_URL=postgresql://postgres:[test-password]@[test-project-ref].pooler.supabase.com:5432/postgres
+NODE_ENV=test
+```
+
+### Supabase Benefits
+- ✅ Managed PostgreSQL service
+- ✅ Built-in real-time features
+- ✅ Automatic backups and scaling
+- ✅ Production-ready from day one
+- ✅ Consistent across all environments
+
+## Production Configuration
+
+### Supabase Production Setup
+```bash
+# Production project with optimized settings
+SUPABASE_DB_URL=postgresql://postgres:[prod-password]@[prod-project-ref].pooler.supabase.com:5432/postgres
+NODE_ENV=production
 ```
 
 📖 **See [Supabase Production Deployment Guide](./supabase-deployment.md) for complete production setup instructions.**
@@ -93,35 +84,46 @@ SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.c
 ```bash
 DB_POOL_MAX=20
 DB_IDLE_TIMEOUT=30000
-DB_CONNECTION_TIMEOUT=2000
+DB_CONNECTION_TIMEOUT=10000
+DB_SSL=true
 ```
 
-## Migration Between Databases
+### Performance Optimization
+```bash
+# Use Supabase connection pooler for better performance
+# Connection string should include .pooler.supabase.com
+SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
+```
+
+## Environment Migration
 
 ### Development to Production Migration
 
-1. **Export SQLite data** (when available):
+1. **Set up production Supabase project**
+2. **Update environment variables**:
    ```bash
-   npm run db:export
+   SUPABASE_DB_URL=postgresql://postgres:[prod-password]@[prod-project-ref].pooler.supabase.com:5432/postgres
    ```
-
-2. **Set up PostgreSQL/Supabase**:
-   - Update environment variables
-   - Restart application
+3. **Restart application**:
    - Migrations run automatically
+   - Schema is created if needed
 
-3. **Import data** (when available):
-   ```bash
-   npm run db:import
-   ```
+### Switching Between Environments
 
-### Switching Database Types
+Switch between different Supabase projects:
 
-The application handles database switching automatically:
-
-1. **Update environment variables**
+1. **Update SUPABASE_DB_URL** to target project
 2. **Restart the application**
 3. **Migrations run automatically**
+
+### Data Migration Between Projects
+```bash
+# Export data from source project
+pg_dump "postgresql://postgres:[src-password]@[src-project].pooler.supabase.com:5432/postgres" > backup.sql
+
+# Import to target project
+psql "postgresql://postgres:[dest-password]@[dest-project].pooler.supabase.com:5432/postgres" < backup.sql
+```
 
 ## Troubleshooting
 
@@ -129,23 +131,16 @@ For detailed troubleshooting instructions, see the **[Database Troubleshooting G
 
 ### Quick Fixes
 
-**SQLite Issues**:
+**Supabase Connection Issues**:
 ```bash
-# Ensure data directory exists and is writable
-mkdir -p ./data
-chmod 755 ./data
+# Test connection directly
+psql "postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres"
 
-# Disable WAL mode if you encounter locking issues
-SQLITE_WAL=false
-```
+# Check project status in Supabase dashboard
+# Verify password and project reference
 
-**PostgreSQL Issues**:
-```bash
-# Test connection
-psql -h localhost -p 5432 -U postgres -d postgres
-
-# Disable SSL for local development
-DB_SSL=false
+# Enable SSL (required for Supabase)
+DB_SSL=true
 ```
 
 **Configuration Validation**:
@@ -164,31 +159,27 @@ npm run db:validate
 ### Local Development (.env.local)
 ```bash
 NODE_ENV=development
-DATABASE_TYPE=sqlite
-SQLITE_FILENAME=./data/development.db
-SQLITE_WAL=true
+SUPABASE_DB_URL=postgresql://postgres:[dev-password]@[dev-project-ref].pooler.supabase.com:5432/postgres
 ```
 
 ### Testing (.env.test)
 ```bash
 NODE_ENV=test
-DATABASE_TYPE=sqlite
-SQLITE_FILENAME=:memory:
+SUPABASE_DB_URL=postgresql://postgres:[test-password]@[test-project-ref].pooler.supabase.com:5432/postgres
 ```
 
 ### Production (.env.production)
 ```bash
 NODE_ENV=production
-DATABASE_TYPE=postgresql
-SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
+SUPABASE_DB_URL=postgresql://postgres:[prod-password]@[prod-project-ref].pooler.supabase.com:5432/postgres
 ```
 
 ## Database Schema
 
-The application uses the same schema for both SQLite and PostgreSQL:
-- Automatic SQL translation handles differences
-- Migrations work on both database types
-- Data types are converted automatically
+The application uses PostgreSQL schema optimized for Supabase:
+- Native PostgreSQL SQL in all migrations
+- Optimized for Supabase features and performance
+- Consistent schema across all environments
 
 ### Schema Files
 - `src/database/migrations/`: SQL migration files
@@ -197,25 +188,17 @@ The application uses the same schema for both SQLite and PostgreSQL:
 
 ## Performance Considerations
 
-### SQLite (Development)
-- Single-writer limitation (fine for development)
-- WAL mode improves concurrent access
-- In-memory option for fastest tests
-
-### PostgreSQL (Production)
-- Full concurrent access
-- Connection pooling for scalability
-- Optimized for production workloads
+### Supabase (All Environments)
+- Full concurrent access across all environments
+- Built-in connection pooling via pooler.supabase.com
+- Automatic scaling and optimization
+- Real-time features for enhanced performance
 
 ## Security Notes
 
-### SQLite
-- File-based: Secure file permissions important
-- No network exposure by default
-- Suitable for development only
-
-### PostgreSQL
-- Network-based: SSL/TLS encryption recommended
-- User authentication required
-- Audit logging available
-- Production-ready security features
+### Supabase Security
+- SSL/TLS encryption enforced by default
+- Row Level Security (RLS) policies available
+- Built-in authentication and authorization
+- Audit logging and monitoring included
+- Production-ready security features across all environments

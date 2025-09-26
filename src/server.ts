@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
+
 import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
@@ -18,9 +18,9 @@ import {
   breachDetection 
 } from './middleware/security';
 import { authRoutes } from './routes/auth';
-import { keycloakAuthRoutes } from './routes/keycloakAuth';
 import { healthRoutes } from './routes/health';
 import securityRoutes from './routes/security';
+import usersRoutes from './routes/users';
 import emailRoutes, { initializeEmailServices } from './routes/email';
 import twilioRoutes, { initializeTwilioServices } from './routes/twilio';
 import communicationRoutes, { initializeCommunicationService } from './routes/communications';
@@ -28,7 +28,7 @@ import voiceRoutes, { initializeVoiceRoutes } from './routes/voice';
 import { createClientProfileRoutes } from './routes/clientProfile';
 import { createRelationshipInsightsRoutes } from './routes/relationshipInsights';
 import createDocumentRoutes from './routes/documents';
-import { PostgreSQLService } from './services/database/postgresqlService';
+import { DatabaseService } from './services/database/DatabaseService';
 import { RedisService } from './services/redis';
 import { CacheService } from './services/cacheService';
 import { EmailIntegrationService } from './services/email/emailIntegrationService';
@@ -69,7 +69,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Request logging
-app.use((req, res, next) => {
+app.use((req, _res, next) => {
   logger.info(`${req.method} ${req.path}`, {
     ip: req.ip,
     userAgent: req.get('User-Agent')
@@ -79,9 +79,9 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/keycloak-auth', keycloakAuthRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/security', securityRoutes);
+app.use('/api/users', usersRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/twilio', twilioRoutes);
 app.use('/api/communications', communicationRoutes);
@@ -115,21 +115,20 @@ const PORT = process.env.PORT || 3000;
 
 async function startServer() {
   try {
-    // Initialize PostgreSQL connection
-    await PostgreSQLService.initialize();
-    await PostgreSQLService.runMigrations();
-    logger.info('PostgreSQL connection established');
+    // Initialize Supabase database connection
+    await DatabaseService.initialize();
+    logger.info('Supabase database connection established');
 
-    // Get the PostgreSQL pool for services
-    const dbPool = PostgreSQLService.getPool();
-
-    // Add client profile routes after database is initialized
-    app.use('/api/clients', createClientProfileRoutes(dbPool, RedisService));
-    app.use('/api/documents', createDocumentRoutes(dbPool));
-
-    // Initialize Redis connection
+    // Initialize Redis connection first
     await RedisService.initialize();
     logger.info('Redis connection established');
+
+    // Get the database pool for services that need direct pool access
+    const dbPool = DatabaseService.getPool();
+
+    // Add routes after both database and Redis are initialized
+    app.use('/api/clients', createClientProfileRoutes(dbPool, RedisService));
+    app.use('/api/documents', createDocumentRoutes(dbPool));
 
     // Initialize NLP service
     const nlpCacheService = new CacheService(RedisService.getClient());
@@ -312,7 +311,44 @@ async function startServer() {
       logger.info(`Environment: ${process.env.NODE_ENV}`);
     });
   } catch (error: any) {
-    logger.error('Failed to start server', { error: error.message });
+    // Enhanced error handling for Supabase connection failures
+    if (error.message?.includes('Database initialization failed') || 
+        error.message?.includes('Database configuration invalid')) {
+      logger.error('Supabase database connection failed', { 
+        error: error.message,
+        hint: 'Check your SUPABASE_DB_URL environment variable and ensure your Supabase project is accessible'
+      });
+    } else if (error.code === 'ENOTFOUND' && error.hostname?.includes('supabase')) {
+      logger.error('Supabase project not found', {
+        error: error.message,
+        hint: 'Verify your Supabase project reference in SUPABASE_DB_URL'
+      });
+    } else if (error.code === '28P01') {
+      logger.error('Supabase authentication failed', {
+        error: error.message,
+        hint: 'Check your database password in SUPABASE_DB_URL'
+      });
+    } else if (error.code === 'ECONNREFUSED') {
+      logger.error('Cannot connect to Supabase database', {
+        error: error.message,
+        hint: 'Ensure your Supabase project is running and accessible'
+      });
+    } else {
+      logger.error('Failed to start server', { error: error.message });
+    }
+    
+    // Log setup instructions for database configuration issues
+    if (error.message?.includes('Database')) {
+      logger.info('Supabase setup instructions:', {
+        steps: [
+          '1. Create a Supabase project at https://supabase.com',
+          '2. Get your database URL from Project Settings > Database',
+          '3. Set SUPABASE_DB_URL environment variable',
+          '4. Ensure your IP is allowed in Supabase network restrictions'
+        ]
+      });
+    }
+    
     process.exit(1);
   }
 }
@@ -320,14 +356,14 @@ async function startServer() {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
-  await PostgreSQLService.close();
+  await DatabaseService.close();
   await RedisService.close();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully');
-  await PostgreSQLService.close();
+  await DatabaseService.close();
   await RedisService.close();
   process.exit(0);
 });

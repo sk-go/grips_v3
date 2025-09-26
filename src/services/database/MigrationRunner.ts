@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { DatabaseAdapter, QueryResult } from '../../types/database';
+import { DatabaseAdapter } from '../../types/database';
 import { logger } from '../../utils/logger';
 
 export interface MigrationRecord {
@@ -20,8 +20,8 @@ export interface MigrationFile {
 }
 
 /**
- * Universal migration runner that works with both SQLite and PostgreSQL
- * Handles migration compatibility issues and tracks migration state
+ * PostgreSQL migration runner for Supabase database
+ * Executes migrations directly as PostgreSQL SQL
  */
 export class MigrationRunner {
   private adapter: DatabaseAdapter;
@@ -76,10 +76,10 @@ export class MigrationRunner {
   private async ensureMigrationsTable(): Promise<void> {
     const createTableSQL = `
       CREATE TABLE IF NOT EXISTS migrations (
-        id TEXT PRIMARY KEY,
-        filename TEXT NOT NULL,
+        id VARCHAR(255) PRIMARY KEY,
+        filename VARCHAR(255) NOT NULL,
         executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        checksum TEXT NOT NULL
+        checksum VARCHAR(64) NOT NULL
       )
     `;
 
@@ -209,30 +209,11 @@ export class MigrationRunner {
   }
 
   /**
-   * Execute migration SQL with proper error handling
+   * Execute migration SQL directly as PostgreSQL
    */
   private async executeMigrationSQL(migrationSQL: string): Promise<void> {
-    // Check if this is SQLite and needs SQL translation
-    const needsTranslation = this.adapter.constructor.name === 'SQLiteAdapter';
-    
-    let processedSQL = migrationSQL;
-    if (needsTranslation) {
-      // Import SQLCompatibilityLayer dynamically to avoid circular dependencies
-      const { SQLCompatibilityLayer } = await import('./adapters/SQLCompatibilityLayer');
-      processedSQL = SQLCompatibilityLayer.translateMigrationSQL(migrationSQL);
-      
-      // Log translation warnings
-      SQLCompatibilityLayer.logTranslationWarnings(migrationSQL, processedSQL);
-      
-      // Log translation for debugging if needed
-      logger.debug('SQL Translation', {
-        originalLength: migrationSQL.length,
-        translatedLength: processedSQL.length
-      });
-    }
-    
     // Split migration into individual statements
-    const statements = this.splitMigrationSQL(processedSQL);
+    const statements = this.splitMigrationSQL(migrationSQL);
     
     for (let i = 0; i < statements.length; i++) {
       const statement = statements[i];
@@ -242,8 +223,7 @@ export class MigrationRunner {
         } catch (error) {
           logger.error(`Failed to execute migration statement ${i + 1}`, {
             statement: statement.substring(0, 100) + (statement.length > 100 ? '...' : ''),
-            error: (error as Error).message,
-            adapter: this.adapter.constructor.name
+            error: (error as Error).message
           });
           throw error;
         }
@@ -252,20 +232,18 @@ export class MigrationRunner {
   }
 
   /**
-   * Split migration SQL into individual statements
-   * Handles PostgreSQL function definitions and complex statements
+   * Split migration SQL into individual statements for PostgreSQL
    */
   private splitMigrationSQL(sql: string): string[] {
-    // Simple approach: split by semicolon and handle special cases
     const statements: string[] = [];
     
-    // First, handle PostgreSQL functions by replacing them with placeholders
+    // Handle PostgreSQL functions by preserving them as complete statements
     let processedSQL = sql;
     const functionPlaceholders: { [key: string]: string } = {};
     let placeholderIndex = 0;
     
-    // Find and replace PostgreSQL functions
-    const functionPattern = /CREATE\s+OR\s+REPLACE\s+FUNCTION[^$]*\$[^$]*\$[^;]*;/gis;
+    // Find and replace PostgreSQL functions (including triggers and procedures)
+    const functionPattern = /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|TRIGGER|PROCEDURE)[^$]*\$[^$]*\$[^;]*;/gis;
     processedSQL = processedSQL.replace(functionPattern, (match) => {
       const placeholder = `__FUNCTION_PLACEHOLDER_${placeholderIndex++}__`;
       functionPlaceholders[placeholder] = match;
@@ -274,6 +252,7 @@ export class MigrationRunner {
     
     // Split by semicolon
     const rawStatements = processedSQL.split(';');
+    
     for (let i = 0; i < rawStatements.length; i++) {
       let statement = rawStatements[i].trim();
       
@@ -281,8 +260,8 @@ export class MigrationRunner {
         continue;
       }
       
-      // Add semicolon back (except for the last statement if it doesn't need one)
-      if (i < rawStatements.length - 1 || statement.includes('CREATE') || statement.includes('INSERT') || statement.includes('UPDATE') || statement.includes('DELETE')) {
+      // Add semicolon back for SQL statements
+      if (statement && !statement.endsWith(';')) {
         statement += ';';
       }
       
@@ -291,7 +270,7 @@ export class MigrationRunner {
         statement = statement.replace(placeholder, originalFunction);
       }
       
-      // Skip comments-only statements (but not statements that contain SQL after comments)
+      // Skip comments-only statements
       const lines = statement.split('\n').map(line => line.trim()).filter(line => line.length > 0);
       const nonCommentLines = lines.filter(line => !line.startsWith('--'));
       if (nonCommentLines.length === 0) {
@@ -300,27 +279,6 @@ export class MigrationRunner {
       
       // Skip empty statements
       if (statement.trim() === ';') {
-        continue;
-      }
-      
-      // Skip PostgreSQL function fragments and malformed statements
-      const isPostgreSQLFragment = 
-        statement.includes('RETURN NEW') || 
-        (statement.includes('END;') && !statement.includes('CREATE')) ||
-        statement.trim().startsWith('$') ||
-        statement.includes('EXECUTE FUNCTION') ||
-        statement.includes('language \'plpgsql\'') ||
-        statement.includes('condition_record') ||
-        statement.includes('action_record') ||
-        statement.includes('DECLARE') ||
-        statement.includes('FOR condition_record IN') ||
-        statement.includes('FOR rule_record IN') ||
-        (statement.trim().startsWith('BEGIN') && statement.includes('FOR')) ||
-        !!statement.match(/^\s*\w+\s+(TEXT|INTEGER|RECORD)\s*;?\s*$/) || // Variable declarations
-        (!!statement.match(/^\s*\w+\s+\w+\s*;?\s*$/) && !statement.includes('CREATE') && !statement.includes('INSERT') && !statement.includes('UPDATE') && !statement.includes('DELETE') && !statement.includes('SELECT')) || // General variable declarations
-        (statement.includes('CREATE') && statement.includes('INDEX') && statement.includes('communication_stats'));
-      
-      if (isPostgreSQLFragment) {
         continue;
       }
       
@@ -336,7 +294,7 @@ export class MigrationRunner {
   private async recordMigrationExecution(migration: MigrationFile): Promise<void> {
     const insertSQL = `
       INSERT INTO migrations (id, filename, executed_at, checksum)
-      VALUES (?, ?, CURRENT_TIMESTAMP, ?)
+      VALUES ($1, $2, CURRENT_TIMESTAMP, $3)
     `;
     
     await this.adapter.query(insertSQL, [

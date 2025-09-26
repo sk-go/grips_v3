@@ -78,6 +78,7 @@ describe('Supabase Configuration', () => {
       process.env.DB_NAME = 'test_db';
       process.env.DB_USER = 'test_user';
       process.env.DB_PASSWORD = 'test_password';
+      process.env.DB_SSL = 'false'; // Explicitly disable SSL for this test
       
       const config = DatabaseConfigManager.getConfig();
       

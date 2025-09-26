@@ -1,7 +1,8 @@
 version: '3.8'
 
 # Base services for the Relationship Care Platform
-# PostgreSQL is now optional - the application defaults to SQLite for development
+# Supabase is the primary database for all environments
+# Local PostgreSQL service is optional for testing only
 
 services:
   # Redis is always needed for caching and session management
@@ -18,7 +19,8 @@ services:
       timeout: 10s
       retries: 3
 
-  # PostgreSQL is now optional - use profiles to control when it starts
+  # PostgreSQL for local testing only (optional)
+  # Primary database operations use Supabase cloud database
   postgres:
     image: postgres:15
     container_name: rcp-postgres

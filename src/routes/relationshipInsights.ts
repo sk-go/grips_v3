@@ -169,7 +169,9 @@ export function createRelationshipInsightsRoutes(
                 metadata: {}
             }));
 
-            const summary = await relationshipInsightsService.generateConversationSummary(clientId, communications);
+            // Extract communication IDs for the summary generation
+            const commIds = communications.map(comm => comm.id);
+            const summary = await relationshipInsightsService.generateConversationSummary(clientId, commIds);
 
             res.json({
                 success: true,
@@ -209,10 +211,16 @@ export function createRelationshipInsightsRoutes(
                 return;
             }
 
-            const trendData = await relationshipInsightsService.getSentimentTrend(
-                clientId,
-                timeframe as '7d' | '30d' | '90d' | '1y'
-            );
+            // Convert timeframe string to number of days
+            const timeframeMap: Record<string, number> = {
+                '7d': 7,
+                '30d': 30,
+                '90d': 90,
+                '1y': 365
+            };
+            const days = timeframeMap[timeframe as string] || 30;
+            
+            const trendData = await relationshipInsightsService.getSentimentTrend(clientId, days);
 
             res.json({
                 success: true,

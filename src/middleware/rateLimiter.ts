@@ -1,4 +1,7 @@
 import rateLimit from 'express-rate-limit';
+import { Request, Response, NextFunction } from 'express';
+import { RateLimitingService } from '../services/rateLimitingService.simple';
+import { ErrorHandlingService } from '../services/errorHandlingService';
 import { logger } from '../utils/logger';
 
 // General API rate limiter
@@ -23,38 +26,29 @@ export const rateLimiter = rateLimit({
       path: req.path
     });
     
-    res.status(429).json({
-      error: 'Too many requests from this IP, please try again later.',
-      retryAfter: '15 minutes'
-    });
-  }
-});
-
-// Stricter rate limiter for authentication endpoints
-export const authRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 auth requests per windowMs
-  message: {
-    error: 'Too many authentication attempts, please try again later.',
-    retryAfter: '15 minutes'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-
-  keyGenerator: (req) => `auth:${req.ip}`,
-  handler: (req, res) => {
-    logger.warn('Auth rate limit exceeded', {
-      ip: req.ip,
-      userAgent: req.get('User-Agent'),
-      path: req.path
-    });
+    const errorResponse = ErrorHandlingService.createRateLimitErrorResponse(
+      'Too many requests from this IP, please try again later.',
+      900, // 15 minutes
+      100,
+      0,
+      Date.now() + 900000
+    );
     
-    res.status(429).json({
-      error: 'Too many authentication attempts, please try again later.',
-      retryAfter: '15 minutes'
-    });
+    res.status(429).json(errorResponse);
   }
 });
+
+// Enhanced authentication rate limiter using our custom service
+export const authRateLimiter = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    // For general auth endpoints, use a simple approach
+    // The specific rate limiting is handled in individual route handlers
+    next();
+  } catch (error) {
+    logger.error('Rate limiter error', { error, path: req.path, ip: req.ip });
+    next(); // Continue on rate limiter error to avoid blocking legitimate requests
+  }
+};
 
 // AI interaction rate limiter (more generous for authenticated users)
 export const aiRateLimiter = rateLimit({
@@ -74,9 +68,25 @@ export const aiRateLimiter = rateLimit({
       path: req.path
     });
     
-    res.status(429).json({
-      error: 'Too many AI requests, please slow down.',
-      retryAfter: '1 minute'
-    });
+    const errorResponse = ErrorHandlingService.createRateLimitErrorResponse(
+      'Too many AI requests, please slow down.',
+      60, // 1 minute
+      30,
+      0,
+      Date.now() + 60000
+    );
+    
+    res.status(429).json(errorResponse);
   }
 });
+
+// Enhanced login rate limiter middleware
+export const loginRateLimiter = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    // Rate limiting is handled directly in the login route for better control
+    next();
+  } catch (error) {
+    logger.error('Login rate limiter error', { error, path: req.path, ip: req.ip });
+    next(); // Continue on rate limiter error to avoid blocking legitimate requests
+  }
+};

@@ -6,7 +6,6 @@
  */
 
 import { DatabaseService } from '../services/database/DatabaseService';
-import { getDatabaseConfig } from '../services/database/config';
 import { logger } from '../utils/logger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -76,16 +75,14 @@ Examples:
   npm run db:init --reset --seed     # Reset, initialize, and seed
 
 Environment Variables:
-  DATABASE_TYPE     Database type: 'sqlite' or 'postgresql' (default: auto-detect)
-  SQLITE_FILENAME   SQLite database file path (default: ./data/development.db)
-  DB_HOST          PostgreSQL host
+  SUPABASE_DB_URL   Supabase database connection URL
+  DB_HOST          PostgreSQL host (alternative to SUPABASE_DB_URL)
   DB_NAME          PostgreSQL database name
   DB_USER          PostgreSQL username
   DB_PASSWORD      PostgreSQL password
 
 Notes:
-  - For SQLite: Database file will be created automatically if it doesn't exist
-  - For PostgreSQL: Database must exist before running this script
+  - Database must exist before running this script
   - Use --reset with caution as it will delete all existing data
 `);
 }
@@ -110,43 +107,32 @@ async function promptConfirmation(message: string): Promise<boolean> {
 /**
  * Reset database (drop all tables)
  */
-async function resetDatabase(dbService: DatabaseService): Promise<void> {
-  logger.info('Resetting database...');
+async function resetDatabase(): Promise<void> {
+  logger.info('Resetting PostgreSQL database...');
 
-  const config = getDatabaseConfig();
-  
-  if (config.type === 'sqlite') {
-    // For SQLite, we can delete the file or drop all tables
-    const sqliteFile = config.sqlite?.filename;
-    if (sqliteFile && sqliteFile !== ':memory:' && fs.existsSync(sqliteFile)) {
-      fs.unlinkSync(sqliteFile);
-      logger.info(`Deleted SQLite database file: ${sqliteFile}`);
+  // Drop all tables in PostgreSQL
+  const client = await DatabaseService.getClient();
+  try {
+    // Get all table names
+    const result = await client.query(`
+      SELECT tablename FROM pg_tables 
+      WHERE schemaname = 'public' 
+      AND tablename != 'schema_migrations'
+    `);
+
+    // Drop all tables
+    for (const row of result.rows) {
+      await client.query(`DROP TABLE IF EXISTS ${row.tablename} CASCADE`);
+      logger.info(`Dropped table: ${row.tablename}`);
     }
-  } else {
-    // For PostgreSQL, drop all tables
-    const client = await dbService.getClient();
-    try {
-      // Get all table names
-      const result = await client.query(`
-        SELECT tablename FROM pg_tables 
-        WHERE schemaname = 'public' 
-        AND tablename != 'schema_migrations'
-      `);
 
-      // Drop all tables
-      for (const row of result.rows) {
-        await client.query(`DROP TABLE IF EXISTS ${row.tablename} CASCADE`);
-        logger.info(`Dropped table: ${row.tablename}`);
-      }
+    // Also drop the migrations table to start fresh
+    await client.query('DROP TABLE IF EXISTS schema_migrations CASCADE');
+    logger.info('Dropped schema_migrations table');
 
-      // Also drop the migrations table to start fresh
-      await client.query('DROP TABLE IF EXISTS schema_migrations CASCADE');
-      logger.info('Dropped schema_migrations table');
-
-    } finally {
-      if (client.release) {
-        client.release();
-      }
+  } finally {
+    if (client.release) {
+      client.release();
     }
   }
 
@@ -156,10 +142,10 @@ async function resetDatabase(dbService: DatabaseService): Promise<void> {
 /**
  * Seed database with sample data
  */
-async function seedDatabase(dbService: DatabaseService): Promise<void> {
+async function seedDatabase(): Promise<void> {
   logger.info('Seeding database with sample data...');
 
-  const client = await dbService.getClient();
+  const client = await DatabaseService.getClient();
   
   try {
     await client.query('BEGIN');
@@ -234,10 +220,10 @@ async function seedDatabase(dbService: DatabaseService): Promise<void> {
 /**
  * Check database health and connectivity
  */
-async function checkDatabaseHealth(dbService: DatabaseService): Promise<void> {
+async function checkDatabaseHealth(): Promise<void> {
   logger.info('Checking database health...');
 
-  const client = await dbService.getClient();
+  const client = await DatabaseService.getClient();
   
   try {
     // Test basic connectivity
@@ -247,37 +233,19 @@ async function checkDatabaseHealth(dbService: DatabaseService): Promise<void> {
     }
 
     // Check if migrations table exists
-    const config = getDatabaseConfig();
-    let migrationTableQuery: string;
-    
-    if (config.type === 'sqlite') {
-      migrationTableQuery = `
-        SELECT name FROM sqlite_master 
-        WHERE type='table' AND name='schema_migrations'
-      `;
-    } else {
-      migrationTableQuery = `
-        SELECT tablename FROM pg_tables 
-        WHERE tablename = 'schema_migrations'
-      `;
-    }
+    const migrationTableQuery = `
+      SELECT tablename FROM pg_tables 
+      WHERE tablename = 'schema_migrations'
+    `;
 
     const migrationResult = await client.query(migrationTableQuery);
     const hasMigrations = migrationResult.rows.length > 0;
 
     // Get table count
-    let tableCountQuery: string;
-    if (config.type === 'sqlite') {
-      tableCountQuery = `
-        SELECT COUNT(*) as count FROM sqlite_master 
-        WHERE type='table' AND name NOT LIKE 'sqlite_%'
-      `;
-    } else {
-      tableCountQuery = `
-        SELECT COUNT(*) as count FROM pg_tables 
-        WHERE schemaname = 'public'
-      `;
-    }
+    const tableCountQuery = `
+      SELECT COUNT(*) as count FROM pg_tables 
+      WHERE schemaname = 'public'
+    `;
 
     const tableResult = await client.query(tableCountQuery);
     const tableCount = tableResult.rows[0].count;
@@ -286,7 +254,7 @@ async function checkDatabaseHealth(dbService: DatabaseService): Promise<void> {
       connected: true,
       hasMigrations,
       tableCount: parseInt(tableCount, 10),
-      databaseType: config.type
+      databaseType: 'postgresql'
     });
 
   } finally {
@@ -310,20 +278,12 @@ async function main(): Promise<void> {
   try {
     logger.info('Starting database initialization...');
 
-    // Get database configuration
-    const config = getDatabaseConfig();
     logger.info('Database configuration loaded', { 
-      type: config.type,
-      sqlite: config.sqlite ? { filename: config.sqlite.filename } : null,
-      postgresql: config.postgresql ? { 
-        host: config.postgresql.host, 
-        database: config.postgresql.database 
-      } : null
+      type: 'postgresql'
     });
 
     // Initialize database service
-    const dbService = new DatabaseService();
-    await dbService.initialize();
+    await DatabaseService.initialize();
 
     // Handle reset option
     if (options.reset) {
@@ -337,28 +297,28 @@ async function main(): Promise<void> {
         }
       }
       
-      await resetDatabase(dbService);
+      await resetDatabase();
       
       // Reinitialize after reset
-      await dbService.close();
-      await dbService.initialize();
+      await DatabaseService.close();
+      await DatabaseService.initialize();
     }
 
     // Run migrations
     logger.info('Running database migrations...');
-    await dbService.runMigrations();
+    await DatabaseService.runMigrations();
     logger.info('Migrations completed successfully');
 
     // Seed database if requested
     if (options.seed) {
-      await seedDatabase(dbService);
+      await seedDatabase();
     }
 
     // Check database health
-    await checkDatabaseHealth(dbService);
+    await checkDatabaseHealth();
 
     // Close database connection
-    await dbService.close();
+    await DatabaseService.close();
 
     console.log('\n✅ Database initialization completed successfully!');
     
@@ -367,12 +327,11 @@ async function main(): Promise<void> {
     }
     
     console.log('\nDatabase is ready for use.');
-    console.log(`Database type: ${config.type}`);
+    console.log('Database type: postgresql');
     
-    if (config.type === 'sqlite') {
-      console.log(`SQLite file: ${config.sqlite?.filename}`);
-    } else {
-      console.log(`PostgreSQL: ${config.postgresql?.host}:${config.postgresql?.port}/${config.postgresql?.database}`);
+    const configSummary = DatabaseService.getConfigSummary() as any;
+    if (configSummary.postgresql) {
+      console.log(`PostgreSQL: ${configSummary.postgresql.host}:${configSummary.postgresql.port}/${configSummary.postgresql.database}`);
     }
 
   } catch (error) {

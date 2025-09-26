@@ -6,7 +6,6 @@
  */
 
 import { DatabaseService } from '../services/database/DatabaseService';
-import { getDatabaseConfig } from '../services/database/config';
 import { logger } from '../utils/logger';
 import { initializeDatabase } from './initializeDatabase';
 import * as fs from 'fs';
@@ -76,9 +75,8 @@ Examples:
   npm run db:reset --backup --force   # Backup and reset
 
 Environment Variables:
-  DATABASE_TYPE     Database type: 'sqlite' or 'postgresql'
-  SQLITE_FILENAME   SQLite database file path
-  DB_HOST          PostgreSQL host
+  SUPABASE_DB_URL   Supabase database connection URL
+  DB_HOST          PostgreSQL host (alternative to SUPABASE_DB_URL)
   DB_NAME          PostgreSQL database name
   DB_USER          PostgreSQL username
   DB_PASSWORD      PostgreSQL password
@@ -87,9 +85,8 @@ Environment Variables:
    Always backup important data before running this command.
 
 Notes:
-  - For SQLite: Deletes the database file
-  - For PostgreSQL: Drops all tables and data
-  - Use --backup option to create a backup before reset (PostgreSQL only)
+  - Drops all tables and data in PostgreSQL/Supabase
+  - Use --backup option to create a backup before reset
   - Use --seed option to populate with sample data after reset
 `);
 }
@@ -115,15 +112,15 @@ async function promptConfirmation(message: string): Promise<boolean> {
  * Create database backup (PostgreSQL only)
  */
 async function createBackup(): Promise<string | null> {
-  const config = getDatabaseConfig();
+  const configSummary = DatabaseService.getConfigSummary() as any;
   
-  if (config.type !== 'postgresql' || !config.postgresql) {
-    logger.warn('Backup is only supported for PostgreSQL databases');
+  if (!configSummary.postgresql) {
+    logger.warn('Backup requires PostgreSQL configuration');
     return null;
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupFile = `./data/backup_${config.postgresql.database}_${timestamp}.sql`;
+  const backupFile = `./data/backup_${configSummary.postgresql.database}_${timestamp}.sql`;
   
   try {
     logger.info('Creating database backup...', { backupFile });
@@ -138,10 +135,10 @@ async function createBackup(): Promise<string | null> {
     const { spawn } = require('child_process');
     
     const pgDumpArgs = [
-      '-h', config.postgresql.host,
-      '-p', config.postgresql.port.toString(),
-      '-U', config.postgresql.user,
-      '-d', config.postgresql.database,
+      '-h', configSummary.postgresql.host,
+      '-p', configSummary.postgresql.port.toString(),
+      '-U', configSummary.postgresql.user,
+      '-d', configSummary.postgresql.database,
       '--no-password',
       '--verbose',
       '--clean',
@@ -154,7 +151,7 @@ async function createBackup(): Promise<string | null> {
       const pgDump = spawn('pg_dump', pgDumpArgs, {
         env: {
           ...process.env,
-          PGPASSWORD: config.postgresql!.password
+          PGPASSWORD: configSummary.postgresql.password
         }
       });
 
@@ -180,46 +177,15 @@ async function createBackup(): Promise<string | null> {
   }
 }
 
-/**
- * Reset SQLite database
- */
-async function resetSQLiteDatabase(config: any): Promise<void> {
-  const sqliteFile = config.sqlite?.filename;
-  
-  if (!sqliteFile || sqliteFile === ':memory:') {
-    logger.info('In-memory SQLite database - no file to delete');
-    return;
-  }
 
-  if (fs.existsSync(sqliteFile)) {
-    fs.unlinkSync(sqliteFile);
-    logger.info('SQLite database file deleted', { file: sqliteFile });
-  } else {
-    logger.info('SQLite database file does not exist', { file: sqliteFile });
-  }
-
-  // Also remove any WAL and SHM files
-  const walFile = `${sqliteFile}-wal`;
-  const shmFile = `${sqliteFile}-shm`;
-  
-  if (fs.existsSync(walFile)) {
-    fs.unlinkSync(walFile);
-    logger.info('SQLite WAL file deleted', { file: walFile });
-  }
-  
-  if (fs.existsSync(shmFile)) {
-    fs.unlinkSync(shmFile);
-    logger.info('SQLite SHM file deleted', { file: shmFile });
-  }
-}
 
 /**
  * Reset PostgreSQL database
  */
-async function resetPostgreSQLDatabase(dbService: DatabaseService): Promise<void> {
+async function resetPostgreSQLDatabase(): Promise<void> {
   logger.info('Resetting PostgreSQL database...');
 
-  const client = await dbService.getClient();
+  const client = await DatabaseService.getClient();
   
   try {
     // Disable foreign key checks temporarily
@@ -316,29 +282,28 @@ async function main(): Promise<void> {
   }
 
   try {
-    // Get database configuration
-    const config = getDatabaseConfig();
-    
     logger.info('Starting database reset...', { 
-      type: config.type,
+      type: 'postgresql',
       backup: options.backup,
       seed: options.seed 
     });
 
+    // Initialize database service to get config
+    await DatabaseService.initialize();
+    const configSummary = DatabaseService.getConfigSummary() as any;
+
     // Confirmation prompt (unless forced)
     if (!options.force) {
       console.log('\n⚠️  WARNING: This will permanently delete all data in your database!');
-      console.log(`Database type: ${config.type}`);
-      
-      if (config.type === 'sqlite') {
-        console.log(`SQLite file: ${config.sqlite?.filename}`);
-      } else {
-        console.log(`PostgreSQL: ${config.postgresql?.host}:${config.postgresql?.port}/${config.postgresql?.database}`);
+      console.log('Database type: postgresql');
+      if (configSummary.postgresql) {
+        console.log(`PostgreSQL: ${configSummary.postgresql.host}:${configSummary.postgresql.port}/${configSummary.postgresql.database}`);
       }
       
       const confirmed = await promptConfirmation('\nAre you sure you want to proceed?');
       if (!confirmed) {
         console.log('Operation cancelled.');
+        await DatabaseService.close();
         return;
       }
     }
@@ -352,19 +317,11 @@ async function main(): Promise<void> {
       }
     }
 
-    // Perform reset based on database type
-    if (config.type === 'sqlite') {
-      await resetSQLiteDatabase(config);
-    } else {
-      // Initialize database service for PostgreSQL
-      const dbService = new DatabaseService();
-      await dbService.initialize();
-      
-      try {
-        await resetPostgreSQLDatabase(dbService);
-      } finally {
-        await dbService.close();
-      }
+    // Perform PostgreSQL reset
+    try {
+      await resetPostgreSQLDatabase();
+    } finally {
+      await DatabaseService.close();
     }
 
     console.log('\n✅ Database reset completed successfully!');

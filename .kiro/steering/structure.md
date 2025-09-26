@@ -54,7 +54,7 @@ services/
 ├── clientProfile/        # Client relationship management
 ├── communication/        # Unified communication center
 ├── crm/                  # CRM integration connectors
-├── database.ts           # PostgreSQL connection management
+├── database/             # Database service with Supabase support
 ├── documents/            # Document generation and templates
 ├── email/                # Email integration (IMAP/SMTP/OAuth)
 ├── nlp/                  # Natural language processing
@@ -154,4 +154,6 @@ Tests mirror the source structure with dedicated test directories:
 
 - **Migrations**: Sequential numbered SQL files in `src/database/migrations/`
 - **Schema**: Auto-generated from migrations on application startup
+- **Adapters**: Support for both Supabase client and direct PostgreSQL connections
+- **Configuration**: Automatic Supabase detection and SSL handling
 - **Seeding**: Example data and demos in `src/examples/`

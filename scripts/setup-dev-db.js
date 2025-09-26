@@ -1,25 +1,16 @@
 #!/usr/bin/env node
 
 /**
- * Development Database Setup Script
+ * Development Database Setup Script - Supabase Only
  * 
- * This script helps developers set up their local database environment
+ * This script helps developers set up their Supabase database environment
  * and validates the configuration.
  */
 
 const fs = require('fs');
 const path = require('path');
 
-console.log('🚀 Setting up development database environment...\n');
-
-// Ensure data directory exists
-const dataDir = path.join(process.cwd(), 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  console.log('✅ Created data directory:', dataDir);
-} else {
-  console.log('✅ Data directory exists:', dataDir);
-}
+console.log('🚀 Setting up Supabase development environment...\n');
 
 // Check if .env file exists
 const envPath = path.join(process.cwd(), '.env');
@@ -31,16 +22,21 @@ if (!fs.existsSync(envPath)) {
     console.log('✅ Created .env file from .env.example');
   } else {
     console.log('⚠️  .env.example not found, creating basic .env file');
-    const basicEnv = `# Basic development configuration
+    const basicEnv = `# Supabase development configuration
 NODE_ENV=development
 PORT=3000
-DATABASE_TYPE=sqlite
-SQLITE_FILENAME=./data/development.db
-SQLITE_WAL=true
+
+# Supabase Database Configuration
+SUPABASE_DB_URL=postgresql://postgres:[your-password]@[your-project-ref].pooler.supabase.com:5432/postgres
+
+# Authentication
 JWT_SECRET=dev-secret-change-in-production
+
+# Redis (for local development)
+REDIS_URL=redis://localhost:6379
 `;
     fs.writeFileSync(envPath, basicEnv);
-    console.log('✅ Created basic .env file');
+    console.log('✅ Created basic .env file with Supabase configuration');
   }
 } else {
   console.log('✅ .env file already exists');
@@ -49,33 +45,32 @@ JWT_SECRET=dev-secret-change-in-production
 // Load environment variables
 require('dotenv').config();
 
-// Validate development configuration
-console.log('\n📋 Development Configuration:');
+// Validate Supabase configuration
+console.log('\n📋 Supabase Configuration:');
 console.log('- NODE_ENV:', process.env.NODE_ENV || 'development');
-console.log('- DATABASE_TYPE:', process.env.DATABASE_TYPE || 'auto-detected');
-console.log('- SQLITE_FILENAME:', process.env.SQLITE_FILENAME || './data/development.db');
-console.log('- SQLITE_WAL:', process.env.SQLITE_WAL || 'true');
+console.log('- SUPABASE_DB_URL:', process.env.SUPABASE_DB_URL ? '✅ Configured' : '❌ Missing');
+console.log('- REDIS_URL:', process.env.REDIS_URL || 'redis://localhost:6379');
 
-// Check database file permissions
-const dbFile = process.env.SQLITE_FILENAME || './data/development.db';
-if (dbFile !== ':memory:') {
-  const dbPath = path.resolve(dbFile);
-  const dbDir = path.dirname(dbPath);
-  
-  try {
-    // Test write permissions
-    fs.accessSync(dbDir, fs.constants.W_OK);
-    console.log('✅ Database directory is writable:', dbDir);
-  } catch (error) {
-    console.log('❌ Database directory is not writable:', dbDir);
-    console.log('   Please check permissions or create the directory');
+// Validate Supabase URL format
+if (process.env.SUPABASE_DB_URL) {
+  const url = process.env.SUPABASE_DB_URL;
+  if (url.includes('supabase.com') && url.startsWith('postgresql://')) {
+    console.log('✅ Supabase URL format looks correct');
+  } else {
+    console.log('⚠️  Supabase URL format may be incorrect');
+    console.log('   Expected format: postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres');
   }
+} else {
+  console.log('❌ SUPABASE_DB_URL is required for development');
+  console.log('   Please add your Supabase connection string to .env');
 }
 
-console.log('\n🎉 Development environment setup complete!');
+console.log('\n🎉 Supabase development environment setup complete!');
 console.log('\nNext steps:');
-console.log('1. Run: npm install');
-console.log('2. Run: npm run dev');
-console.log('3. The application will automatically create and migrate the database');
+console.log('1. Configure your Supabase project and update SUPABASE_DB_URL in .env');
+console.log('2. Run: npm install');
+console.log('3. Run: npm run docker:dev:redis-only (for Redis only)');
+console.log('4. Run: npm run dev');
+console.log('5. The application will automatically connect to Supabase and run migrations');
 
-console.log('\n📚 For more information, see: docs/database-setup.md');
+console.log('\n📚 For more information, see: docs/supabase-deployment.md');

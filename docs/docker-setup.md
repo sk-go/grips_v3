@@ -1,85 +1,56 @@
 # Docker Setup Guide
 
-This guide explains how to use Docker with the Relationship Care Platform, including the new optional PostgreSQL configuration.
+This guide explains how to use Docker with the Relationship Care Platform for development services.
 
 ## Overview
 
-The application now supports flexible database backends:
-- **SQLite** (default): No Docker services needed for database
-- **PostgreSQL** (optional): Use Docker when you need PostgreSQL for testing or development
-- **Redis** (required): Always needed for caching and sessions
+The application uses Supabase for database operations and Docker for supporting services:
+- **Supabase** (database): Managed PostgreSQL service, no Docker container needed
+- **Redis** (required): Docker container for caching and sessions
 
 ## Quick Start
 
-### SQLite Development (Recommended)
+### Development Setup
 ```bash
-# Start only Redis (SQLite is file-based, no container needed)
+# Start Redis for caching
 docker-compose up redis
 
 # Or start in background
 docker-compose up -d redis
 ```
 
-The application will automatically use SQLite at `./data/development.db`.
-
-### PostgreSQL Development
+Configure your Supabase connection:
 ```bash
-# Start Redis + PostgreSQL
-docker-compose --profile postgres up
-
-# Or start in background
-docker-compose --profile postgres up -d
-
-# Alternative: use the full profile
-docker-compose --profile full up -d
+SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
 ```
 
-Then set your environment to use PostgreSQL:
+Then start your application:
 ```bash
-DATABASE_TYPE=postgresql
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=relationship_care_platform
-DB_USER=postgres
-DB_PASSWORD=password
+npm run dev
 ```
 
-## Docker Compose Profiles
+## Docker Services
 
-### Available Profiles
+### Available Services
 
-1. **Default** (no profile): Only Redis
+1. **Redis** (required): Caching and session storage
    ```bash
-   docker-compose up
+   docker-compose up redis
    ```
 
-2. **postgres**: Redis + PostgreSQL
-   ```bash
-   docker-compose --profile postgres up
-   ```
-
-3. **full**: All services (Redis + PostgreSQL)
-   ```bash
-   docker-compose --profile full up
-   ```
-
-### Profile Usage Examples
+### Usage Examples
 
 ```bash
-# Development with SQLite (minimal Docker usage)
-docker-compose up redis
-npm run dev
+# Development setup
+docker-compose up -d redis
+SUPABASE_DB_URL=your-supabase-url npm run dev
 
-# Development with PostgreSQL
-docker-compose --profile postgres up -d
-DATABASE_TYPE=postgresql npm run dev
+# Testing environment
+docker-compose up -d redis
+npm test
 
-# Full development environment
-docker-compose --profile full up -d
-npm run dev
-
-# Production-like testing
-docker-compose --profile full up
+# Background services
+docker-compose up -d
 ```
 
 ## Environment-Specific Configurations
@@ -113,48 +84,42 @@ npm test
 - **Port**: 6379
 - **Volume**: Persistent data storage
 - **Health Check**: Built-in ping check
-- **Always Required**: Yes
+- **Required**: Yes, for caching and sessions
 
-### PostgreSQL Service (Optional)
-- **Image**: postgres:15
-- **Port**: 5432
-- **Database**: relationship_care_platform
-- **User**: postgres
-- **Password**: password (dev), password123 (dev.yml)
-- **Volume**: Persistent data storage
-- **Health Check**: pg_isready
-- **Migration Support**: Auto-loads migrations on startup
+### Database Service
+- **Supabase**: Managed PostgreSQL service
+- **Connection**: Via SUPABASE_DB_URL environment variable
+- **No Docker**: Database runs on Supabase infrastructure
+- **Migration Support**: Auto-runs migrations on application startup
 
 ## Database Configuration
 
-### Automatic Detection
-The application automatically detects which database to use:
+### Supabase Configuration
+The application uses Supabase for all database operations:
 
 ```bash
-# SQLite (default for development)
-NODE_ENV=development
-# No additional config needed
+# Primary configuration (recommended)
+SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
 
-# PostgreSQL (when Docker is running)
-DATABASE_TYPE=postgresql
-DB_HOST=localhost
+# Alternative individual variables
+DB_HOST=[project-ref].pooler.supabase.com
 DB_PORT=5432
-DB_NAME=relationship_care_platform
+DB_NAME=postgres
 DB_USER=postgres
-DB_PASSWORD=password
+DB_PASSWORD=[your-password]
+DB_SSL=true
 ```
 
-### Manual Override
+### Environment-Specific Configuration
 ```bash
-# Force SQLite even in production
-DATABASE_TYPE=sqlite
-SQLITE_FILENAME=./data/production.db
+# Development
+SUPABASE_DB_URL=postgresql://postgres:[dev-password]@[dev-project].pooler.supabase.com:5432/postgres
 
-# Force PostgreSQL even in development
-DATABASE_TYPE=postgresql
-DB_HOST=localhost
-DB_PORT=5432
-# ... other DB config
+# Testing
+SUPABASE_DB_URL=postgresql://postgres:[test-password]@[test-project].pooler.supabase.com:5432/postgres
+
+# Production
+SUPABASE_DB_URL=postgresql://postgres:[prod-password]@[prod-project].pooler.supabase.com:5432/postgres
 ```
 
 ## Common Workflows
@@ -168,60 +133,55 @@ cd relationship-care-platform
 # 2. Install dependencies
 npm install
 
-# 3. Start minimal Docker services
+# 3. Set up environment
+cp .env.example .env
+# Edit .env with your Supabase configuration
+
+# 4. Start Redis
 docker-compose up -d redis
 
-# 4. Start application (uses SQLite automatically)
+# 5. Start application
 npm run dev
 ```
 
-### PostgreSQL Testing
+### Supabase Connection Testing
 ```bash
-# 1. Start PostgreSQL
-docker-compose --profile postgres up -d
+# 1. Configure Supabase
+export SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
 
-# 2. Configure environment
-export DATABASE_TYPE=postgresql
-export DB_HOST=localhost
-export DB_PORT=5432
-export DB_NAME=relationship_care_platform
-export DB_USER=postgres
-export DB_PASSWORD=password
+# 2. Start Redis
+docker-compose up -d redis
 
 # 3. Start application
 npm run dev
 
-# 4. Verify database type
+# 4. Verify database connection
 curl http://localhost:3001/health/database
 ```
 
-### Switching Between Databases
+### Environment Switching
 ```bash
-# Switch to SQLite
-docker-compose down postgres  # Stop PostgreSQL
-unset DATABASE_TYPE           # Use default (SQLite)
+# Switch to different Supabase project
+export SUPABASE_DB_URL=postgresql://postgres:[new-password]@[new-project].pooler.supabase.com:5432/postgres
 npm run dev
 
-# Switch to PostgreSQL
-docker-compose --profile postgres up -d
-export DATABASE_TYPE=postgresql
+# Use different environment file
+docker-compose --env-file .env.test up -d redis
 npm run dev
 ```
 
 ## Troubleshooting
 
-### PostgreSQL Won't Start
+### Supabase Connection Issues
 ```bash
-# Check if port is in use
-lsof -i :5432
+# Test Supabase connection
+psql "postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres"
 
-# Check Docker logs
-docker-compose logs postgres
+# Check application database configuration
+npm run db:status
 
-# Reset PostgreSQL data
-docker-compose down
-docker volume rm relationship-care-platform_postgres_data
-docker-compose --profile postgres up
+# Test database connection
+npm run db:test-connection
 ```
 
 ### Redis Connection Issues
@@ -236,29 +196,15 @@ docker-compose logs redis
 docker-compose exec redis redis-cli ping
 ```
 
-### Database Connection Errors
+### Redis Port Conflicts
 ```bash
-# Check application database configuration
-npm run db:status
-
-# Test database connection
-npm run db:test-connection
-
-# Check Docker service health
-docker-compose ps
-```
-
-### Port Conflicts
-```bash
-# Use different ports if needed
+# Use different Redis port if needed
 # Edit docker-compose.yml:
 ports:
-  - "5433:5432"  # PostgreSQL on 5433
   - "6380:6379"  # Redis on 6380
 
 # Update application config accordingly
-DB_PORT=5433
-REDIS_PORT=6380
+REDIS_URL=redis://localhost:6380
 ```
 
 ## Performance Optimization

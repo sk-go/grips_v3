@@ -239,24 +239,17 @@ describe('Supabase Integration Tests', () => {
       expect(supabaseConfig.postgresql?.ssl).toBe(true);
     });
 
-    it('should handle migration from SQLite to Supabase', () => {
-      // Start with SQLite configuration
-      process.env.DATABASE_TYPE = 'sqlite';
-      process.env.SQLITE_FILENAME = './local.db';
-      
-      const sqliteConfig = DatabaseConfigManager.getConfig();
-      expect(sqliteConfig.type).toBe('sqlite');
+    it('should handle Supabase configuration', () => {
+      // Test Supabase configuration
+      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       DatabaseConfigManager.resetConfig();
-      
-      // Switch to Supabase
-      process.env.DATABASE_TYPE = 'postgresql';
-      delete process.env.SQLITE_FILENAME;
-      process.env.SUPABASE_DB_URL = 'postgresql://postgres:password@db.project.supabase.co:5432/postgres';
       
       const supabaseConfig = DatabaseConfigManager.getConfig();
       expect(supabaseConfig.type).toBe('postgresql');
       expect(supabaseConfig.postgresql?.host).toBe('db.project.supabase.co');
+      expect(supabaseConfig.postgresql?.database).toBe('postgres');
+      expect(supabaseConfig.postgresql?.user).toBe('postgres');
     });
   });
 

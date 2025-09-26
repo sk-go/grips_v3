@@ -1,4 +1,4 @@
-import { DatabaseConfig, DatabaseType } from '../../types/database';
+import { DatabaseConfig } from '../../types/database';
 import { logger } from '../../utils/logger';
 
 export class DatabaseConfigManager {
@@ -6,93 +6,63 @@ export class DatabaseConfigManager {
 
   /**
    * Get database configuration based on environment variables
+   * Only supports PostgreSQL/Supabase configuration
    */
   static getConfig(): DatabaseConfig {
     if (this.config) {
       return this.config;
     }
 
-    const databaseType = this.determineDatabaseType();
+    // Check for Supabase client configuration first (URL + API Key)
+    const supabaseProjectUrl = process.env.SUPABASE_URL;
+    const supabaseApiKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
     
-    if (databaseType === 'sqlite') {
-      let filename = process.env.SQLITE_FILENAME;
-      const nodeEnv = process.env.NODE_ENV;
-      
-      // Only provide default in development/test environments
-      if (filename === undefined && (nodeEnv === 'development' || nodeEnv === 'test')) {
-        filename = './data/development.db';
-      }
-      
+    if (supabaseProjectUrl && supabaseApiKey) {
       this.config = {
-        type: 'sqlite',
-        sqlite: {
-          filename: filename || '',
-          enableWAL: process.env.SQLITE_WAL === 'true'
+        type: 'supabase',
+        supabase: {
+          url: supabaseProjectUrl,
+          apiKey: supabaseApiKey,
+          schema: process.env.SUPABASE_SCHEMA || 'public'
         }
       };
     } else {
-  // Check for Supabase connection string first
-  const supabaseUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
-  
+      // Check for Supabase connection string
+      const supabaseUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+      
       if (supabaseUrl) {
         this.config = {
           type: 'postgresql',
           postgresql: this.parseSupabaseConnectionString(supabaseUrl)
         };
       } else {
+        // Fallback to individual PostgreSQL environment variables
         this.config = {
           type: 'postgresql',
           postgresql: {
-            host: process.env.DB_HOST || '',
+            host: process.env.DB_HOST || 'localhost',
             port: parseInt(process.env.DB_PORT || '5432'),
-            database: process.env.DB_NAME || '',
-            user: process.env.DB_USER || '',
+            database: process.env.DB_NAME || 'relationship_care',
+            user: process.env.DB_USER || 'postgres',
             password: process.env.DB_PASSWORD || '',
-            ssl: process.env.DB_SSL === 'true',
+            ssl: process.env.DB_SSL !== 'false', // Default to true for Supabase
             max: parseInt(process.env.DB_POOL_MAX || '20'),
             idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '30000'),
-            connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '2000')
+            connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000')
           }
         };
       }
     }
 
-    if (!this.config) {
-      throw new Error('Failed to create database configuration');
-    }
-
     this.validateConfig(this.config);
-    logger.info('Database configuration loaded', { type: this.config.type });
+    logger.info('Database configuration loaded', { 
+      type: this.config.type,
+      host: this.config.postgresql?.host || this.config.supabase?.url,
+      database: this.config.postgresql?.database || 'supabase',
+      ssl: this.config.postgresql?.ssl || true
+    });
     
     return this.config;
-  }
-
-  /**
-   * Determine database type based on environment variables and defaults
-   */
-  private static determineDatabaseType(): DatabaseType {
-    // Explicit override
-    const explicitType = process.env.DATABASE_TYPE as DatabaseType;
-    if (explicitType) {
-      if (!['sqlite', 'postgresql'].includes(explicitType)) {
-        throw new Error(`Unsupported database type: ${explicitType}`);
-      }
-      return explicitType;
-    }
-
-    // Environment-based defaults
-    const nodeEnv = process.env.NODE_ENV;
-    
-    if (nodeEnv === 'development' || nodeEnv === 'test') {
-      return 'sqlite';
-    }
-    
-    if (nodeEnv === 'production') {
-      return 'postgresql';
-    }
-
-    // Default fallback
-    return 'sqlite';
   }
 
   /**
@@ -142,12 +112,31 @@ export class DatabaseConfigManager {
   }
 
   /**
-   * Validate database configuration format (not required fields)
+   * Validate database configuration (PostgreSQL or Supabase client)
    */
   private static validateConfig(config: DatabaseConfig): void {
-    if (config.type === 'sqlite') {
-      // No required field checks here; moved to validateEnvironmentSetup
-      // Could add format validation if needed (e.g., check if filename is a valid path)
+    if (config.type === 'supabase') {
+      const supabase = config.supabase;
+      
+      if (!supabase) {
+        throw new Error('Database configuration invalid: Supabase configuration is missing');
+      }
+      
+      if (!supabase.url || !supabase.url.trim()) {
+        throw new Error('Database configuration invalid: Supabase URL is required');
+      }
+      
+      if (!supabase.apiKey || !supabase.apiKey.trim()) {
+        throw new Error('Database configuration invalid: Supabase API key is required');
+      }
+      
+      // Validate URL format
+      try {
+        new URL(supabase.url);
+      } catch {
+        throw new Error('Database configuration invalid: Supabase URL must be a valid URL');
+      }
+      
     } else if (config.type === 'postgresql') {
       const pg = config.postgresql;
       
@@ -155,19 +144,24 @@ export class DatabaseConfigManager {
         throw new Error('Database configuration invalid: PostgreSQL configuration is missing');
       }
       
-      // Only validate format and validity of provided values
+      // Validate port format
       if (pg.port && (pg.port < 1 || pg.port > 65535 || isNaN(pg.port) || pg.port % 1 !== 0)) {
         throw new Error('Database configuration invalid: PostgreSQL port must be a valid integer between 1 and 65535');
       }
 
-      // Validate Supabase-specific requirements (warn only for SSL)
+      // Validate Supabase-specific requirements
       if (pg.host?.includes('supabase')) {
         if (!pg.ssl) {
-          logger.warn('Supabase connections should use SSL. Consider setting ssl: true.');
+          logger.warn('Supabase connections should use SSL. SSL has been automatically enabled.');
+          pg.ssl = true; // Auto-correct for Supabase
+        }
+        
+        if (!pg.password || pg.password.trim() === '') {
+          throw new Error('Supabase connections require a password. Check your SUPABASE_DB_URL or set DB_PASSWORD.');
         }
       }
     } else {
-      throw new Error(`Database configuration invalid: Unsupported database type: ${config.type}`);
+      throw new Error(`Database configuration invalid: Unsupported database type '${config.type}'`);
     }
   }
 
@@ -179,39 +173,14 @@ export class DatabaseConfigManager {
   }
 
   /**
-   * Get helpful setup instructions based on current configuration
+   * Get helpful setup instructions for Supabase configuration
    */
   static getSetupInstructions(): string {
     try {
       const config = this.getConfig();
+      const isSupabase = config.postgresql?.host?.includes('supabase') || false;
       
-      if (config.type === 'sqlite') {
-        return `
-SQLite Configuration (Current):
-- Database file: ${config.sqlite?.filename}
-- WAL mode: ${config.sqlite?.enableWAL ? 'enabled' : 'disabled'}
-- Environment: ${process.env.NODE_ENV || 'not set'}
-
-Quick Setup for SQLite Development:
-1. Ensure the data directory exists: mkdir -p ./data
-2. Set environment variables (optional):
-   SQLITE_FILENAME=./data/development.db
-   SQLITE_WAL=true
-
-To switch to PostgreSQL, set:
-DATABASE_TYPE=postgresql
-DB_HOST=your_host
-DB_NAME=your_database
-DB_USER=your_user
-DB_PASSWORD=your_password
-
-For Supabase (recommended for production):
-SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
-        `.trim();
-      } else {
-        const isSupabase = config.postgresql?.host?.includes('supabase') || false;
-        
-        const troubleshooting = `
+      const troubleshooting = `
 Common Issues:
 - Connection timeout: Check network connectivity and firewall settings
 - Authentication failed: Verify username and password
@@ -219,7 +188,7 @@ Common Issues:
 - Pool exhaustion: Increase DB_POOL_MAX if needed (current: ${config.postgresql?.max || 20})
 `;
 
-        const supabaseSection = isSupabase ? `
+      const supabaseSection = isSupabase ? `
 Supabase Setup (Current Configuration):
 1. Go to your Supabase project dashboard
 2. Navigate to Settings > Database  
@@ -240,7 +209,7 @@ For Supabase deployment (recommended):
 
 `;
 
-        return `
+      return `
 PostgreSQL Configuration${isSupabase ? ' (Supabase)' : ''}:
 - Host: ${config.postgresql?.host}:${config.postgresql?.port}
 - Database: ${config.postgresql?.database}
@@ -250,33 +219,23 @@ PostgreSQL Configuration${isSupabase ? ' (Supabase)' : ''}:
 - Environment: ${process.env.NODE_ENV || 'not set'}
 
 ${supabaseSection}${troubleshooting}
-
-To use SQLite for development instead:
-DATABASE_TYPE=sqlite
-SQLITE_FILENAME=./data/development.db
         `.trim();
-      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return `
 Database Configuration Error: ${errorMessage}
 
-Basic Setup Instructions:
-1. For development (SQLite):
-   NODE_ENV=development
-   DATABASE_TYPE=sqlite
-   SQLITE_FILENAME=./data/development.db
+Supabase Setup Instructions:
+1. Create a Supabase project at https://supabase.com
+2. Get your connection string from Settings > Database
+3. Set: SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
 
-2. For production (PostgreSQL):
-   NODE_ENV=production
-   DATABASE_TYPE=postgresql
-   DB_HOST=your_host
-   DB_NAME=your_database
-   DB_USER=your_user
-   DB_PASSWORD=your_password
-
-3. For Supabase (recommended):
-   SUPABASE_DB_URL=postgresql://postgres:[password]@[project-ref].pooler.supabase.com:5432/postgres
+Alternative PostgreSQL Setup:
+DB_HOST=your_host
+DB_NAME=your_database
+DB_USER=your_user
+DB_PASSWORD=your_password
+DB_SSL=true
 
 Check your .env file and ensure all required variables are set.
       `.trim();
@@ -284,16 +243,9 @@ Check your .env file and ensure all required variables are set.
   }
 
   /**
-   * Validate environment setup and provide specific guidance
+   * Validate PostgreSQL/Supabase environment setup and provide specific guidance
    */
   static validateEnvironmentSetup(): { isValid: boolean; errors: string[]; warnings: string[] } {
-    return this.validateEnvironmentSetupNew();
-  }
-
-  /**
-   * New validation method to test if caching is the issue
-   */
-  static validateEnvironmentSetupNew(): { isValid: boolean; errors: string[]; warnings: string[] } {
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -303,73 +255,49 @@ Check your .env file and ensure all required variables are set.
       // Check NODE_ENV
       const nodeEnv = process.env.NODE_ENV;
       if (!nodeEnv) {
-        warnings.push('NODE_ENV is not set. Defaulting to SQLite.');
+        warnings.push('NODE_ENV is not set.');
       }
 
-      if (config.type === 'sqlite') {
-        // SQLite-specific validation - check actual environment variable
-        const envFilename = process.env.SQLITE_FILENAME;
-        if (!envFilename || envFilename.trim() === '') {
-          errors.push('SQLite filename is required but not provided.');
-        } else if (config.sqlite?.filename) {
-          // Check if directory exists
-          const path = require('path');
-          const fs = require('fs');
-          const dir = path.dirname(config.sqlite.filename);
-          
-          try {
-            if (!fs.existsSync(dir)) {
-              warnings.push(`SQLite directory ${dir} does not exist. It will be created automatically.`);
-            }
-          } catch (e) {
-            warnings.push(`Cannot check SQLite directory: ${e instanceof Error ? e.message : 'Unknown error'}`);
-          }
+      // PostgreSQL-specific validation
+      const hasConnectionString = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+      
+      if (!hasConnectionString) {
+        if (!process.env.DB_HOST || process.env.DB_HOST.trim() === '') {
+          errors.push('PostgreSQL host is required. Set DB_HOST or use SUPABASE_DB_URL.');
+        }
+        
+        if (!process.env.DB_NAME || process.env.DB_NAME.trim() === '') {
+          errors.push('PostgreSQL database name is required. Set DB_NAME or use SUPABASE_DB_URL.');
+        }
+        
+        if (!process.env.DB_USER || process.env.DB_USER.trim() === '') {
+          errors.push('PostgreSQL user is required. Set DB_USER or use SUPABASE_DB_URL.');
         }
 
-        if (nodeEnv === 'production') {
-          warnings.push('Using SQLite in production. Consider PostgreSQL/Supabase for better performance and reliability.');
+        if (!process.env.DB_PASSWORD || process.env.DB_PASSWORD.trim() === '') {
+          errors.push('PostgreSQL password is required. Set DB_PASSWORD or use SUPABASE_DB_URL.');
+        }
+      }
+
+      const pg = config.postgresql;
+      
+      // Supabase-specific checks
+      if (pg?.host?.includes('supabase')) {
+        if (!pg.password || pg.password.trim() === '') {
+          errors.push('Supabase connections require a password. Check your SUPABASE_DB_URL or set DB_PASSWORD.');
+        }
+        
+        if (!pg.ssl) {
+          warnings.push('Supabase connections should use SSL. SSL will be automatically enabled.');
+        }
+        
+        if (pg.port !== 5432) {
+          warnings.push(`Supabase typically uses port 5432, but ${pg.port} is configured.`);
         }
       } else {
-        // PostgreSQL-specific validation
-        const hasConnectionString = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
-        
-        if (!hasConnectionString) {
-          if (!process.env.DB_HOST || process.env.DB_HOST.trim() === '') {
-            errors.push('PostgreSQL host is required. Set DB_HOST or use SUPABASE_DB_URL.');
-          }
-          
-          if (!process.env.DB_NAME || process.env.DB_NAME.trim() === '') {
-            errors.push('PostgreSQL database name is required. Set DB_NAME or use SUPABASE_DB_URL.');
-          }
-          
-          if (!process.env.DB_USER || process.env.DB_USER.trim() === '') {
-            errors.push('PostgreSQL user is required. Set DB_USER or use SUPABASE_DB_URL.');
-          }
-
-          if (!process.env.DB_PASSWORD || process.env.DB_PASSWORD.trim() === '') {
-            errors.push('PostgreSQL password is required. Set DB_PASSWORD or use SUPABASE_DB_URL.');
-          }
-        }
-
-        const pg = config.postgresql;
-        
-        // Supabase-specific checks
-        if (pg?.host?.includes('supabase')) {
-          if (!pg.password || pg.password.trim() === '') {
-            errors.push('Supabase connections require a password. Check your SUPABASE_DB_URL or set DB_PASSWORD.');
-          }
-          
-          if (!pg.ssl) {
-            errors.push('Supabase connections require SSL. This should be automatically enabled.');
-          }
-          
-          if (pg.port !== 5432) {
-            warnings.push(`Supabase typically uses port 5432, but ${pg.port} is configured.`);
-          }
-        }
-
-        if (nodeEnv === 'development' && !process.env.DATABASE_TYPE) {
-          warnings.push('Using PostgreSQL in development. Consider SQLite for easier setup (set DATABASE_TYPE=sqlite).');
+        // Non-Supabase PostgreSQL warnings
+        if (!pg?.ssl && nodeEnv === 'production') {
+          warnings.push('SSL is disabled for PostgreSQL in production. Consider enabling SSL for security.');
         }
       }
 
@@ -399,29 +327,25 @@ Check your .env file and ensure all required variables are set.
       return {
         type: config.type,
         environment: process.env.NODE_ENV || 'not set',
-        explicitType: process.env.DATABASE_TYPE || 'not set',
         validation: {
           isValid: validation.isValid,
           errorCount: validation.errors.length,
           warningCount: validation.warnings.length
         },
-        config: config.type === 'sqlite' ? {
-          filename: config.sqlite?.filename,
-          enableWAL: config.sqlite?.enableWAL
-        } : {
+        config: {
           host: config.postgresql?.host,
           port: config.postgresql?.port,
           database: config.postgresql?.database,
           user: config.postgresql?.user,
           ssl: config.postgresql?.ssl,
-          isSupabase: config.postgresql?.host?.includes('supabase') || false
+          isSupabase: config.postgresql?.host?.includes('supabase') || false,
+          poolSize: config.postgresql?.max
         }
       };
     } catch (error) {
       return {
         error: error instanceof Error ? error.message : 'Unknown error',
-        environment: process.env.NODE_ENV || 'not set',
-        explicitType: process.env.DATABASE_TYPE || 'not set'
+        environment: process.env.NODE_ENV || 'not set'
       };
     }
   }

@@ -1,7 +1,8 @@
 version: '3.8'
 
-# Development environment with optional PostgreSQL
-# By default, only Redis starts. Use profiles to start PostgreSQL when needed.
+# Development environment for Supabase-only architecture
+# Redis is needed for caching. PostgreSQL service is optional for local testing only.
+# Primary database operations use Supabase cloud database.
 
 services:
   # Redis is always needed for development
@@ -18,7 +19,8 @@ services:
       timeout: 10s
       retries: 3
 
-  # PostgreSQL for development (optional)
+  # PostgreSQL for local testing only (optional)
+  # Use Supabase for all development work. This service is only for isolated testing.
   # Start with: docker-compose -f docker-compose.dev.yml --profile postgres up
   postgres:
     image: postgres:15

@@ -142,7 +142,7 @@ export class RelationshipInsightsService {
           lastCalculated: new Date()
         };
         
-        await this.redis.setex(cacheKey, 3600, JSON.stringify(defaultScore));
+        await this.redis.setEx(cacheKey, 3600, JSON.stringify(defaultScore));
         return defaultScore;
       }
 
@@ -172,7 +172,7 @@ export class RelationshipInsightsService {
       };
 
       // Cache for 1 hour
-      await this.redis.setex(cacheKey, 3600, JSON.stringify(healthScore));
+      await this.redis.setEx(cacheKey, 3600, JSON.stringify(healthScore));
       
       logger.info(`Calculated relationship health for client ${clientId}: ${healthScore.score}`);
       return healthScore;
@@ -209,8 +209,8 @@ export class RelationshipInsightsService {
         language: 'en'
       });
 
-      // Extract key topics and action items
-      const keyTopics = nlpResult.entities?.map(entity => entity.text) || [];
+      // Extract key topics and action items based on actual NLP response structure
+      const keyTopics = nlpResult.entities?.map(entity => entity.value) || [];
       const actionItems = nlpResult.tasks?.map(task => task.description) || [];
 
       // Calculate average sentiment
@@ -223,7 +223,7 @@ export class RelationshipInsightsService {
         id: `summary_${Date.now()}`,
         clientId,
         communicationId: communicationIds.length === 1 ? communicationIds[0] : undefined,
-        summary: nlpResult.summary || 'Summary generation failed',
+        summary: combinedText.substring(0, 500) + '...', // Simple summary fallback
         keyTopics: keyTopics.slice(0, 10), // Limit to top 10
         actionItems: actionItems.slice(0, 5), // Limit to top 5
         sentimentScore: avgSentiment,
@@ -282,7 +282,7 @@ export class RelationshipInsightsService {
       }));
 
       // Cache for 30 minutes
-      await this.redis.setex(cacheKey, 1800, JSON.stringify(trendPoints));
+      await this.redis.setEx(cacheKey, 1800, JSON.stringify(trendPoints));
       
       return trendPoints;
 

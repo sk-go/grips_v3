@@ -19,16 +19,13 @@ export interface DatabaseAdapter {
   getClient(): Promise<DatabaseClient>;
   close(): Promise<void>;
   runMigrations(): Promise<void>;
+  getPool?(): any; // Optional method for PostgreSQL adapter compatibility
 }
 
-export type DatabaseType = 'sqlite' | 'postgresql';
+export type DatabaseType = 'postgresql' | 'supabase';
 
 export interface DatabaseConfig {
   type: DatabaseType;
-  sqlite?: {
-    filename: string;
-    enableWAL?: boolean;
-  };
   postgresql?: {
     host: string;
     port: number;
@@ -39,6 +36,11 @@ export interface DatabaseConfig {
     max?: number;
     idleTimeoutMillis?: number;
     connectionTimeoutMillis?: number;
+  };
+  supabase?: {
+    url: string;
+    apiKey: string;
+    schema?: string;
   };
 }
 
