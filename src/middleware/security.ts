@@ -2,6 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import { TLSSocket } from 'tls';
 import { sensitiveDataService } from '../services/security/sensitiveDataService';
+import { SecurityMonitoringService } from '../services/security/securityMonitoringService';
+import { EnhancedRateLimitingService } from '../services/security/enhancedRateLimitingService';
+import { AIInputSanitizationService } from '../services/security/aiInputSanitizationService';
 import { logger } from '../utils/logger';
 
 /**
@@ -215,44 +218,93 @@ export const sensitiveEndpointRateLimit = (maxRequests: number = 10, windowMs: n
 /**
  * Middleware to detect and prevent potential security breaches
  */
-export const breachDetection = (req: Request, res: Response, next: NextFunction): void => {
-  const suspiciousPatterns = [
-    /(?:union|select|insert|delete|drop|create|alter)\s+/gi, // SQL injection
-    /<script[^>]*>.*?<\/script>/gi, // XSS
-    /javascript:/gi, // JavaScript protocol
-    /data:text\/html/gi, // Data URI XSS
-    /\.\.\//g, // Path traversal
-    /__proto__|constructor|prototype/gi // Prototype pollution
-  ];
+export const breachDetection = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const requestData = JSON.stringify({
+      body: req.body,
+      query: req.query,
+      params: req.params
+    });
 
-  const requestData = JSON.stringify({
-    body: req.body,
-    query: req.query,
-    params: req.params
-  });
+    // Use the enhanced AI input sanitization service
+    const sanitizationResult = AIInputSanitizationService.sanitizeInput(requestData, {
+      strictMode: process.env.NODE_ENV === 'production'
+    });
 
-  for (const pattern of suspiciousPatterns) {
-    if (pattern.test(requestData)) {
+    if (sanitizationResult.flagged) {
       logger.error('Potential security breach detected', {
-        pattern: pattern.source,
+        riskLevel: sanitizationResult.riskLevel,
+        reasons: sanitizationResult.reasons,
         path: req.path,
         method: req.method,
         ip: req.ip,
         userAgent: req.get('User-Agent'),
         userId: (req as any).user?.id,
-        suspiciousData: sensitiveDataService.sanitizeForLogging(requestData)
+        patternsDetected: sanitizationResult.patterns.length
       });
 
-      // In production, block suspicious requests
-      if (process.env.NODE_ENV === 'production') {
+      // Trigger breach detection for high-risk requests
+      if (sanitizationResult.riskLevel === 'high' || sanitizationResult.riskLevel === 'critical') {
+        await SecurityMonitoringService.detectBreach('injection_attempt', {
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          path: req.path,
+          method: req.method,
+          userId: (req as any).user?.id,
+          riskLevel: sanitizationResult.riskLevel,
+          reasons: sanitizationResult.reasons,
+          patterns: sanitizationResult.patterns
+        });
+      }
+
+      // Block critical security threats
+      if (sanitizationResult.riskLevel === 'critical') {
+        res.status(403).json({
+          error: 'Forbidden',
+          message: 'Critical security threat detected'
+        });
+        return;
+      }
+
+      // In production, block high-risk requests
+      if (process.env.NODE_ENV === 'production' && sanitizationResult.riskLevel === 'high') {
         res.status(403).json({
           error: 'Forbidden',
           message: 'Suspicious activity detected'
         });
         return;
       }
-    }
-  }
 
-  next();
+      // Store sanitization result for downstream use
+      (req as any).securitySanitization = sanitizationResult;
+    }
+
+    next();
+  } catch (error) {
+    logger.error('Error in breach detection middleware', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      path: req.path,
+      method: req.method,
+      ip: req.ip
+    });
+    next(); // Continue processing on error
+  }
+};
+
+/**
+ * Enhanced IP blocking middleware
+ */
+export const ipBlockingMiddleware = EnhancedRateLimitingService.createIPBlockMiddleware();
+
+/**
+ * AI-specific security middleware
+ */
+export const aiSecurityMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+  // Apply AI-specific rate limiting and input sanitization
+  const aiRateLimit = EnhancedRateLimitingService.createAIRateLimit({
+    max: 30, // 30 requests per minute for AI endpoints
+    windowMs: 60 * 1000
+  });
+
+  aiRateLimit(req, res, next);
 };

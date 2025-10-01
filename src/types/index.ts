@@ -10,7 +10,7 @@
 export interface Client {
   id: string;
   crmId: string; // Reference to CRM system record
-  crmSystem: 'zoho' | 'salesforce' | 'hubspot' | 'agencybloc';
+  crmSystem: 'zoho' | 'salesforce' | 'hubspot' | 'agencybloc' | 'professional-works';
   // Core data fetched from CRM
   name: string;
   email: string;
@@ -343,7 +343,7 @@ export const REDIS_KEYS = {
 // Utility Types
 // ============================================================================
 
-export type CrmSystem = 'zoho' | 'salesforce' | 'hubspot' | 'agencybloc';
+export type CrmSystem = 'zoho' | 'salesforce' | 'hubspot' | 'agencybloc' | 'professional-works';
 export type CommunicationType = 'email' | 'call' | 'sms';
 export type TaskType = 'email' | 'call' | 'meeting' | 'follow-up' | 'document' | 'research';
 export type Priority = 'low' | 'medium' | 'high';
@@ -352,7 +352,7 @@ export type SentimentTrend = 'positive' | 'neutral' | 'negative';
 
 // Type guards for runtime type checking
 export const isValidCrmSystem = (system: string): system is CrmSystem => {
-  return ['zoho', 'salesforce', 'hubspot', 'agencybloc'].includes(system);
+  return ['zoho', 'salesforce', 'hubspot', 'agencybloc', 'professional-works'].includes(system);
 };
 
 export const isValidCommunicationType = (type: string): type is CommunicationType => {

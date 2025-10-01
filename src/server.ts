@@ -10,6 +10,26 @@ import { logger } from './utils/logger';
 import { rateLimiter } from './middleware/rateLimiter';
 import { errorHandler } from './middleware/errorHandler';
 import { 
+  initializeMonitoring,
+  correlationIdMiddleware,
+  requestLoggingMiddleware,
+  errorTrackingMiddleware,
+  analyticsMiddleware,
+  loggingService
+} from './services/monitoring';
+import monitoringRoutes from './routes/monitoring';
+import costTrackingRoutes from './routes/costTracking';
+import aiServiceRoutes, { initializeAIServiceMonitoring } from './routes/aiService';
+import { 
+  performanceTrackingMiddleware, 
+  performanceHeadersMiddleware,
+  requestTimeoutMiddleware,
+  gracefulDegradationMiddleware 
+} from './middleware/performanceMiddleware';
+import { performanceMonitor } from './services/performance/performanceMonitor';
+import { autoScalingService } from './services/performance/autoScalingService';
+import performanceRoutes from './routes/performance';
+import { 
   securityHeaders, 
   enforceHTTPS, 
   sensitiveDataScanner, 
@@ -21,6 +41,7 @@ import { authRoutes } from './routes/auth';
 import { healthRoutes } from './routes/health';
 import securityRoutes from './routes/security';
 import usersRoutes from './routes/users';
+import complianceRoutes from './routes/compliance';
 import emailRoutes, { initializeEmailServices } from './routes/email';
 import twilioRoutes, { initializeTwilioServices } from './routes/twilio';
 import communicationRoutes, { initializeCommunicationService } from './routes/communications';
@@ -28,6 +49,8 @@ import voiceRoutes, { initializeVoiceRoutes } from './routes/voice';
 import { createClientProfileRoutes } from './routes/clientProfile';
 import { createRelationshipInsightsRoutes } from './routes/relationshipInsights';
 import createDocumentRoutes from './routes/documents';
+import onboardingRoutes from './routes/onboarding';
+import configurationRoutes from './routes/configuration';
 import { DatabaseService } from './services/database/DatabaseService';
 import { RedisService } from './services/redis';
 import { CacheService } from './services/cacheService';
@@ -61,6 +84,12 @@ app.use(securityAuditLogger);
 app.use(breachDetection);
 app.use(sensitiveDataScanner);
 
+// Performance monitoring middleware
+app.use(performanceTrackingMiddleware);
+app.use(performanceHeadersMiddleware);
+app.use(requestTimeoutMiddleware(30000)); // 30 second timeout
+app.use(gracefulDegradationMiddleware);
+
 // Rate limiting
 app.use(rateLimiter);
 
@@ -68,7 +97,15 @@ app.use(rateLimiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging
+// Initialize monitoring services
+initializeMonitoring();
+
+// Monitoring middleware
+app.use(correlationIdMiddleware);
+app.use(requestLoggingMiddleware);
+app.use(analyticsMiddleware);
+
+// Request logging (legacy - now handled by monitoring)
 app.use((req, _res, next) => {
   logger.info(`${req.method} ${req.path}`, {
     ip: req.ip,
@@ -82,10 +119,17 @@ app.use('/api/auth', authRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/compliance', complianceRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/twilio', twilioRoutes);
 app.use('/api/communications', communicationRoutes);
 app.use('/api/voice', voiceRoutes);
+app.use('/api/onboarding', onboardingRoutes);
+app.use('/api/configuration', configurationRoutes);
+app.use('/api/performance', performanceRoutes);
+app.use('/api/monitoring', monitoringRoutes);
+app.use('/api/cost-tracking', costTrackingRoutes);
+app.use('/api/ai-service', aiServiceRoutes);
 // Client profile routes will be added after database initialization
 
 // WebSocket handling for AI interactions
@@ -107,6 +151,9 @@ wss.on('connection', (ws, req) => {
     logger.info('WebSocket connection closed');
   });
 });
+
+// Error tracking middleware (before error handler)
+app.use(errorTrackingMiddleware);
 
 // Error handling middleware (must be last)
 app.use(errorHandler);
@@ -133,6 +180,13 @@ async function startServer() {
     // Initialize NLP service
     const nlpCacheService = new CacheService(RedisService.getClient());
     const nlpConfig: NLPConfig = {
+      claude: {
+        apiKey: process.env.CLAUDE_API_KEY || '',
+        model: process.env.CLAUDE_MODEL || 'claude-3-sonnet-20240229',
+        temperature: parseFloat(process.env.CLAUDE_TEMPERATURE || '0.7'),
+        maxTokens: parseInt(process.env.CLAUDE_MAX_TOKENS || '1000'),
+        costThreshold: parseFloat(process.env.CLAUDE_COST_THRESHOLD || '0.10')
+      },
       grok: {
         apiKey: process.env.GROK_API_KEY || '',
         baseUrl: process.env.GROK_BASE_URL || 'https://api.x.ai/v1',
@@ -165,6 +219,10 @@ async function startServer() {
 
     const nlpService = new NLPService(nlpCacheService, nlpConfig);
     logger.info('NLP service initialized');
+
+    // Initialize AI service monitoring
+    initializeAIServiceMonitoring(nlpService.getClaudeClient());
+    logger.info('AI service monitoring initialized');
 
     // Add relationship insights routes
     app.use('/api/relationship-insights', createRelationshipInsightsRoutes(dbPool, RedisService.getClient(), nlpService.getProcessor()));
@@ -305,10 +363,21 @@ async function startServer() {
     initializeVoiceRoutes(voiceService);
     logger.info('Voice service initialized');
 
+    // Start performance monitoring
+    performanceMonitor.startMonitoring(30000); // Monitor every 30 seconds
+    logger.info('Performance monitoring started');
+
+    // Start auto-scaling monitoring (disabled by default, enable for production)
+    if (process.env.ENABLE_AUTO_SCALING === 'true') {
+      autoScalingService.startAutoScaling(60000); // Evaluate every minute
+      logger.info('Auto-scaling monitoring started');
+    }
+
     // Start server
     server.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV}`);
+      logger.info('Performance requirements: <500ms response time, 100 concurrent agents');
     });
   } catch (error: any) {
     // Enhanced error handling for Supabase connection failures
@@ -356,6 +425,7 @@ async function startServer() {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
+  performanceMonitor.stopMonitoring();
   await DatabaseService.close();
   await RedisService.close();
   process.exit(0);
@@ -363,9 +433,13 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully');
+  performanceMonitor.stopMonitoring();
   await DatabaseService.close();
   await RedisService.close();
   process.exit(0);
 });
+
+// Export app for testing
+export { app };
 
 startServer();

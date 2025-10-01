@@ -1,0 +1,55 @@
+# Terraform Variables Example
+# Copy this file to terraform.tfvars and customize the values
+
+# AWS Configuration
+aws_region = "us-east-1"
+environment = "production"
+
+# Application Configuration
+app_name = "relationship-care-platform"
+domain_name = "your-domain.com"
+
+# Notification Configuration
+# alert_email = "alerts@your-company.com"
+# slack_webhook_url = "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+
+# Database Configuration (Supabase)
+# These will be set as placeholder values and should be updated manually
+# supabase_url = "https://your-project-ref.supabase.co"
+# supabase_service_role_key = "your-service-role-key"
+
+# Redis Configuration
+redis_node_type = "cache.t3.micro"
+redis_num_cache_clusters = 2
+
+# ECS Configuration
+ecs_cpu = 1024
+ecs_memory = 2048
+ecs_desired_count = 2
+ecs_max_capacity = 10
+ecs_min_capacity = 2
+
+# Load Balancer Configuration
+# ssl_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+
+# Backup Configuration
+backup_retention_days = 30
+backup_lifecycle_glacier_days = 90
+backup_lifecycle_deep_archive_days = 365
+
+# Monitoring Configuration
+health_check_interval = 30
+health_check_timeout = 5
+health_check_failure_threshold = 3
+
+# Auto Scaling Configuration
+cpu_target_value = 70.0
+memory_target_value = 80.0
+
+# Tags
+tags = {
+  Project = "Relationship Care Platform"
+  Environment = "production"
+  Owner = "DevOps Team"
+  CostCenter = "Engineering"
+}

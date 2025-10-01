@@ -5,6 +5,9 @@
  * Provides comprehensive database status and health information
  */
 
+import * as dotenv from 'dotenv';
+dotenv.config();
+
 import { DatabaseService } from '../services/database/DatabaseService';
 import { logger } from '../utils/logger';
 import * as fs from 'fs';

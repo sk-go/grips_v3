@@ -181,7 +181,7 @@ router.post('/index', authenticateToken, async (req, res) => {
     }
 
     // Generate embedding
-    const embedding = await nlpService.getGrokClient().generateEmbedding(content);
+    const embedding = await nlpService.getClaudeClient().generateEmbedding(content);
     
     await nlpService.getVectorSearch().indexDocument(id, content, embedding, metadata);
 
@@ -219,10 +219,10 @@ router.get('/similar/:documentId', authenticateToken, async (req, res) => {
   }
 });
 
-// Test Grok API connection
+// Test Claude API connection
 router.get('/test-connection', authenticateToken, async (req, res) => {
   try {
-    const isConnected = await nlpService.getGrokClient().testConnection();
+    const isConnected = await nlpService.getClaudeClient().testConnection();
 
     res.json({ 
       connected: isConnected,
@@ -230,7 +230,7 @@ router.get('/test-connection', authenticateToken, async (req, res) => {
     });
 
   } catch (error: any) {
-    logger.error('Grok connection test failed', error);
+    logger.error('Claude connection test failed', error);
     res.status(500).json({ 
       error: 'Connection test failed',
       message: error.message 
@@ -269,11 +269,17 @@ router.get('/config', authenticateToken, async (req, res) => {
         dimensions: config.vectorSearch.dimensions,
         similarityThreshold: config.vectorSearch.similarityThreshold
       },
-      grok: {
+      claude: {
+        model: config.claude.model,
+        temperature: config.claude.temperature,
+        maxTokens: config.claude.maxTokens,
+        costThreshold: config.claude.costThreshold
+      },
+      grok: config.grok ? {
         model: config.grok.model,
         temperature: config.grok.temperature,
         maxTokens: config.grok.maxTokens
-      }
+      } : null
     };
 
     res.json(publicConfig);

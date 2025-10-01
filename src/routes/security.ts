@@ -1,300 +1,324 @@
 import { Router, Request, Response } from 'express';
-import { authenticateToken, requireRole } from '../middleware/auth';
-import { 
-  encryptionService, 
-  keyManagementService, 
-  sensitiveDataService 
-} from '../services/security';
+import { authenticateToken } from '../middleware/auth';
+import { asyncHandler } from '../middleware/errorHandler';
+import { SecurityMonitoringService } from '../services/security/securityMonitoringService';
+import { ErrorHandlingService } from '../services/errorHandlingService';
+import { DatabaseService } from '../services/database';
 import { logger } from '../utils/logger';
 
 const router = Router();
 
-/**
- * GET /api/security/status
- * Get overall security status (admin only)
- */
-router.get('/status', authenticateToken, requireRole('admin'), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const encryptionStatus = encryptionService.getStatus();
-    const keyManagementStatus = keyManagementService.getStatus();
-    const keyIntegrity = await keyManagementService.validateKeysIntegrity();
-
-    res.json({
-      encryption: encryptionStatus,
-      keyManagement: keyManagementStatus,
-      keyIntegrity,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    logger.error('Error fetching security status:', error);
-    res.status(500).json({ error: 'Failed to fetch security status' });
+// All security routes require authentication and admin privileges
+router.use(authenticateToken);
+router.use((req: Request, res: Response, next): void => {
+  if (req.user?.role !== 'admin') {
+    const errorResponse = ErrorHandlingService.createErrorResponse(
+      'Access denied. Admin privileges required.',
+      'INSUFFICIENT_PRIVILEGES'
+    );
+    res.status(403).json(errorResponse);
+    return;
   }
+  next();
 });
 
-/**
- * POST /api/security/keys/rotate
- * Manually trigger key rotation (admin only)
- */
-router.post('/keys/rotate', authenticateToken, requireRole('admin'), async (req: Request, res: Response): Promise<void> => {
+// Get security dashboard data
+router.get('/dashboard', asyncHandler(async (req: Request, res: Response) => {
   try {
-    const { emergency, reason } = req.body;
-    const userId = (req as any).user?.id;
+    const result = await DatabaseService.query('SELECT get_security_dashboard_data() as data');
+    const dashboardData = result.rows[0]?.data || {};
 
-    let rotationEvent;
-    if (emergency && reason) {
-      rotationEvent = await keyManagementService.emergencyRotation(reason);
-      logger.warn('Emergency key rotation triggered', { userId, reason });
-    } else {
-      rotationEvent = await keyManagementService.rotateKeys('manual');
-      logger.info('Manual key rotation triggered', { userId });
-    }
-
-    res.json({
-      message: 'Key rotation completed successfully',
-      event: rotationEvent
+    return res.json({
+      success: true,
+      data: dashboardData
     });
-  } catch (error) {
-    logger.error('Key rotation failed:', error);
-    res.status(500).json({ 
-      error: 'Key rotation failed',
-      message: error instanceof Error ? error.message : 'Unknown error'
+  } catch (error: any) {
+    logger.error('Failed to get security dashboard data', {
+      adminId: req.user!.id,
+      error: error.message
     });
+
+    const errorResponse = ErrorHandlingService.createErrorResponse(
+      'Failed to retrieve security dashboard data',
+      'DASHBOARD_FAILED'
+    );
+    return res.status(500).json(errorResponse);
   }
-});
+}));
 
-/**
- * GET /api/security/keys/history
- * Get key rotation history (admin only)
- */
-router.get('/keys/history', authenticateToken, requireRole('admin'), async (req: Request, res: Response): Promise<void> => {
+// Get security alerts with filtering
+router.get('/alerts', asyncHandler(async (req: Request, res: Response) => {
   try {
-    const { limit } = req.query;
-    const limitNum = limit ? parseInt(limit as string) : 50;
-    
-    const history = keyManagementService.getRotationHistory(limitNum);
-    
-    res.json({
-      history,
-      total: history.length
-    });
-  } catch (error) {
-    logger.error('Error fetching key rotation history:', error);
-    res.status(500).json({ error: 'Failed to fetch key rotation history' });
-  }
-});
-
-/**
- * POST /api/security/keys/validate
- * Validate key integrity (admin only)
- */
-router.post('/keys/validate', authenticateToken, requireRole('admin'), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const validation = await keyManagementService.validateKeysIntegrity();
-    
-    res.json(validation);
-  } catch (error) {
-    logger.error('Key validation failed:', error);
-    res.status(500).json({ error: 'Key validation failed' });
-  }
-});
-
-/**
- * PUT /api/security/keys/config
- * Update key management configuration (admin only)
- */
-router.put('/keys/config', authenticateToken, requireRole('admin'), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { enabled, schedule, notificationEmail } = req.body;
-    const userId = (req as any).user?.id;
-
-    // Validate schedule if provided
-    if (schedule && typeof schedule !== 'string') {
-      res.status(400).json({ error: 'Schedule must be a valid cron expression' });
-      return;
-    }
-
-    const config = {
-      ...(enabled !== undefined && { enabled }),
-      ...(schedule && { schedule }),
-      ...(notificationEmail && { notificationEmail })
+    const filters = {
+      type: req.query.type as string,
+      severity: req.query.severity as string,
+      resolved: req.query.resolved === 'true' ? true : req.query.resolved === 'false' ? false : undefined,
+      limit: req.query.limit ? parseInt(req.query.limit as string) : 50,
+      offset: req.query.offset ? parseInt(req.query.offset as string) : 0
     };
 
-    keyManagementService.updateConfig(config);
-    
-    logger.info('Key management configuration updated', { userId, config });
-    
-    res.json({
-      message: 'Configuration updated successfully',
-      config: keyManagementService.getStatus()
+    const alerts = await SecurityMonitoringService.getSecurityAlerts(filters);
+
+    return res.json({
+      success: true,
+      alerts,
+      count: alerts.length,
+      filters
     });
-  } catch (error) {
-    logger.error('Error updating key management configuration:', error);
-    res.status(500).json({ error: 'Failed to update configuration' });
-  }
-});
-
-/**
- * POST /api/security/data/classify
- * Classify text for sensitive data (authenticated users)
- */
-router.post('/data/classify', authenticateToken, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { text } = req.body;
-    
-    if (!text || typeof text !== 'string') {
-      res.status(400).json({ error: 'Text is required for classification' });
-      return;
-    }
-
-    const classification = sensitiveDataService.classifyText(text);
-    
-    // Don't return the actual matches for security, just the classification
-    res.json({
-      hasSensitiveData: classification.hasSensitiveData,
-      riskLevel: classification.riskLevel,
-      matchCount: classification.matches.length,
-      redactedText: classification.redactedText
+  } catch (error: any) {
+    logger.error('Failed to get security alerts', {
+      adminId: req.user!.id,
+      error: error.message
     });
-  } catch (error) {
-    logger.error('Error classifying text:', error);
-    res.status(500).json({ error: 'Failed to classify text' });
+
+    const errorResponse = ErrorHandlingService.createErrorResponse(
+      'Failed to retrieve security alerts',
+      'ALERTS_RETRIEVAL_FAILED'
+    );
+    return res.status(500).json(errorResponse);
   }
-});
+}));
 
-/**
- * POST /api/security/data/sanitize
- * Sanitize text for logging (authenticated users)
- */
-router.post('/data/sanitize', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+// Resolve a security alert
+router.post('/alerts/:alertId/resolve', asyncHandler(async (req: Request, res: Response) => {
+  const { alertId } = req.params;
+  const { notes } = req.body;
+
   try {
-    const { text } = req.body;
-    
-    if (!text || typeof text !== 'string') {
-      res.status(400).json({ error: 'Text is required for sanitization' });
-      return;
-    }
+    const success = await SecurityMonitoringService.resolveAlert(
+      alertId,
+      req.user!.id,
+      notes
+    );
 
-    const sanitized = sensitiveDataService.sanitizeForLogging(text);
-    
-    res.json({
-      sanitizedText: sanitized
-    });
-  } catch (error) {
-    logger.error('Error sanitizing text:', error);
-    res.status(500).json({ error: 'Failed to sanitize text' });
-  }
-});
-
-/**
- * GET /api/security/patterns
- * Get configured sensitive data patterns (admin only)
- */
-router.get('/patterns', authenticateToken, requireRole('admin'), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const patterns = sensitiveDataService.getPatterns();
-    
-    // Remove the actual regex patterns for security
-    const safePatterns = patterns.map(pattern => ({
-      name: pattern.name,
-      riskLevel: pattern.riskLevel,
-      description: pattern.description
-    }));
-    
-    res.json({
-      patterns: safePatterns,
-      total: patterns.length
-    });
-  } catch (error) {
-    logger.error('Error fetching sensitive data patterns:', error);
-    res.status(500).json({ error: 'Failed to fetch patterns' });
-  }
-});
-
-/**
- * POST /api/security/patterns
- * Add custom sensitive data pattern (admin only)
- */
-router.post('/patterns', authenticateToken, requireRole('admin'), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { name, pattern, riskLevel, description } = req.body;
-    const userId = (req as any).user?.id;
-
-    // Validate required fields
-    if (!name || !pattern || !riskLevel || !description) {
-      res.status(400).json({ 
-        error: 'Name, pattern, riskLevel, and description are required' 
+    if (success) {
+      return res.json({
+        success: true,
+        message: 'Security alert resolved successfully'
       });
-      return;
+    } else {
+      const errorResponse = ErrorHandlingService.createErrorResponse(
+        'Failed to resolve security alert',
+        'ALERT_RESOLUTION_FAILED'
+      );
+      return res.status(400).json(errorResponse);
     }
-
-    // Validate risk level
-    if (!['low', 'medium', 'high'].includes(riskLevel)) {
-      res.status(400).json({ error: 'Risk level must be low, medium, or high' });
-      return;
-    }
-
-    try {
-      // Validate regex pattern
-      new RegExp(pattern, 'g');
-    } catch (regexError) {
-      res.status(400).json({ error: 'Invalid regex pattern' });
-      return;
-    }
-
-    const customPattern = {
-      name,
-      pattern: new RegExp(pattern, 'g'),
-      riskLevel,
-      description
-    };
-
-    sensitiveDataService.addCustomPattern(customPattern);
-    
-    logger.info('Custom sensitive data pattern added', { 
-      userId, 
-      patternName: name, 
-      riskLevel 
+  } catch (error: any) {
+    logger.error('Failed to resolve security alert', {
+      alertId,
+      adminId: req.user!.id,
+      error: error.message
     });
-    
-    res.status(201).json({
-      message: 'Custom pattern added successfully',
-      pattern: {
-        name,
-        riskLevel,
-        description
-      }
-    });
-  } catch (error) {
-    logger.error('Error adding custom pattern:', error);
-    res.status(500).json({ error: 'Failed to add custom pattern' });
+
+    const errorResponse = ErrorHandlingService.createErrorResponse(
+      'Failed to resolve security alert',
+      'ALERT_RESOLUTION_FAILED'
+    );
+    return res.status(500).json(errorResponse);
   }
-});
+}));
 
-/**
- * GET /api/security/audit
- * Get security audit information (admin only)
- */
-router.get('/audit', authenticateToken, requireRole('admin'), async (req: Request, res: Response): Promise<void> => {
+// Get IP reputation information
+router.get('/ip-reputation/:ipAddress', asyncHandler(async (req: Request, res: Response) => {
+  const { ipAddress } = req.params;
+
   try {
-    const { startDate, endDate, limit } = req.query;
-    
-    // This would integrate with your audit logging system
-    // For now, return basic security metrics
-    const metrics = {
-      keyRotations: keyManagementService.getRotationHistory(10),
-      encryptionStatus: encryptionService.getStatus(),
-      timestamp: new Date().toISOString(),
-      period: {
-        start: startDate || 'N/A',
-        end: endDate || 'N/A'
-      }
-    };
-    
-    res.json(metrics);
-  } catch (error) {
-    logger.error('Error fetching security audit information:', error);
-    res.status(500).json({ error: 'Failed to fetch audit information' });
+    // Validate IP address format
+    const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    if (!ipRegex.test(ipAddress)) {
+      const errorResponse = ErrorHandlingService.createErrorResponse(
+        'Invalid IP address format',
+        'INVALID_IP_ADDRESS'
+      );
+      return res.status(400).json(errorResponse);
+    }
+
+    const reputationScore = await SecurityMonitoringService.checkIPReputation(ipAddress);
+
+    // Get cached reputation data if available
+    const result = await DatabaseService.query(
+      'SELECT * FROM ip_reputation_cache WHERE ip_address = $1',
+      [ipAddress]
+    );
+
+    const reputationData = result.rows[0] ? {
+      ipAddress: result.rows[0].ip_address,
+      reputation: result.rows[0].reputation,
+      score: result.rows[0].score,
+      sources: result.rows[0].sources,
+      lastChecked: result.rows[0].last_checked,
+      metadata: result.rows[0].metadata
+    } : null;
+
+    return res.json({
+      success: true,
+      ipAddress,
+      reputationScore,
+      reputationData
+    });
+  } catch (error: any) {
+    logger.error('Failed to get IP reputation', {
+      ipAddress,
+      adminId: req.user!.id,
+      error: error.message
+    });
+
+    const errorResponse = ErrorHandlingService.createErrorResponse(
+      'Failed to retrieve IP reputation',
+      'IP_REPUTATION_FAILED'
+    );
+    return res.status(500).json(errorResponse);
   }
-});
+}));
+
+// Get registration patterns
+router.get('/registration-patterns', asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+    const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+    const flaggedOnly = req.query.flagged === 'true';
+
+    let query = `
+      SELECT 
+        ip_address,
+        email_pattern,
+        registration_count,
+        time_window_minutes,
+        first_seen,
+        last_seen,
+        suspicious_score,
+        flagged
+      FROM registration_patterns
+    `;
+
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (flaggedOnly) {
+      query += ` WHERE flagged = true`;
+    }
+
+    query += ` ORDER BY suspicious_score DESC, last_seen DESC`;
+    query += ` LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    params.push(limit, offset);
+
+    const result = await DatabaseService.query(query, params);
+
+    const patterns = result.rows.map(row => ({
+      ipAddress: row.ip_address,
+      emailPattern: row.email_pattern,
+      registrationCount: row.registration_count,
+      timeWindowMinutes: row.time_window_minutes,
+      firstSeen: row.first_seen,
+      lastSeen: row.last_seen,
+      suspiciousScore: row.suspicious_score,
+      flagged: row.flagged
+    }));
+
+    return res.json({
+      success: true,
+      patterns,
+      count: patterns.length,
+      limit,
+      offset
+    });
+  } catch (error: any) {
+    logger.error('Failed to get registration patterns', {
+      adminId: req.user!.id,
+      error: error.message
+    });
+
+    const errorResponse = ErrorHandlingService.createErrorResponse(
+      'Failed to retrieve registration patterns',
+      'PATTERNS_RETRIEVAL_FAILED'
+    );
+    return res.status(500).json(errorResponse);
+  }
+}));
+
+// Get security statistics
+router.get('/statistics', asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const timeWindow = req.query.timeWindow as string || '7d';
+    
+    let interval: string;
+    switch (timeWindow) {
+      case '24h':
+        interval = '24 hours';
+        break;
+      case '7d':
+        interval = '7 days';
+        break;
+      case '30d':
+        interval = '30 days';
+        break;
+      default:
+        interval = '7 days';
+    }
+
+    const result = await DatabaseService.query(`
+      SELECT 
+        type,
+        severity,
+        COUNT(*) as count,
+        COUNT(*) FILTER (WHERE resolved = false) as unresolved_count
+      FROM security_alerts 
+      WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '${interval}'
+      GROUP BY type, severity
+      ORDER BY count DESC
+    `);
+
+    const statistics = result.rows.map(row => ({
+      type: row.type,
+      severity: row.severity,
+      count: parseInt(row.count),
+      unresolvedCount: parseInt(row.unresolved_count)
+    }));
+
+    return res.json({
+      success: true,
+      timeWindow,
+      statistics
+    });
+  } catch (error: any) {
+    logger.error('Failed to get security statistics', {
+      adminId: req.user!.id,
+      error: error.message
+    });
+
+    const errorResponse = ErrorHandlingService.createErrorResponse(
+      'Failed to retrieve security statistics',
+      'STATISTICS_RETRIEVAL_FAILED'
+    );
+    return res.status(500).json(errorResponse);
+  }
+}));
+
+// Manual security cleanup
+router.post('/cleanup', asyncHandler(async (req: Request, res: Response) => {
+  try {
+    await DatabaseService.query('SELECT cleanup_security_data()');
+
+    logger.info('Manual security cleanup executed', {
+      adminId: req.user!.id
+    });
+
+    return res.json({
+      success: true,
+      message: 'Security data cleanup completed successfully'
+    });
+  } catch (error: any) {
+    logger.error('Failed to execute security cleanup', {
+      adminId: req.user!.id,
+      error: error.message
+    });
+
+    const errorResponse = ErrorHandlingService.createErrorResponse(
+      'Failed to execute security cleanup',
+      'CLEANUP_FAILED'
+    );
+    return res.status(500).json(errorResponse);
+  }
+}));
 
 export default router;

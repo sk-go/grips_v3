@@ -9,27 +9,27 @@ import {
   ConversationContext,
   ContextMessage
 } from '../../types/nlp';
-import { GrokApiClient } from './grokApiClient';
+import { ClaudeApiClient } from './claudeApiClient';
 import { TaskExtractionService } from './taskExtractionService';
 import { ContextAggregationService } from './contextAggregationService';
 import { VectorSearchService } from './vectorSearchService';
 import { logger } from '../../utils/logger';
 
 export class NLPProcessingService {
-  private grokClient: GrokApiClient;
+  private claudeClient: ClaudeApiClient;
   private taskExtractor: TaskExtractionService;
   private contextAggregator: ContextAggregationService;
   private vectorSearch: VectorSearchService;
   private config: NLPConfig;
 
   constructor(
-    grokClient: GrokApiClient,
+    claudeClient: ClaudeApiClient,
     taskExtractor: TaskExtractionService,
     contextAggregator: ContextAggregationService,
     vectorSearch: VectorSearchService,
     config: NLPConfig
   ) {
-    this.grokClient = grokClient;
+    this.claudeClient = claudeClient;
     this.taskExtractor = taskExtractor;
     this.contextAggregator = contextAggregator;
     this.vectorSearch = vectorSearch;
@@ -398,7 +398,7 @@ export class NLPProcessingService {
     try {
       if (!this.config.vectorSearch.enabled) return;
       
-      const embedding = await this.grokClient.generateEmbedding(text);
+      const embedding = await this.claudeClient.generateEmbedding(text);
       const documentId = `nlp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
       const metadata = {
@@ -451,7 +451,8 @@ export class NLPProcessingService {
     return {
       vectorSearch: vectorStats,
       supportedLanguages: this.config.languages.length,
-      grokConnection: await this.grokClient.testConnection()
+      claudeConnection: await this.claudeClient.testConnection(),
+      claudeUsage: this.claudeClient.getUsageStats()
     };
   }
 
@@ -464,12 +465,12 @@ export class NLPProcessingService {
         return [];
       }
 
-      // Use Grok API to extract key topics
+      // Use Claude API to extract key topics
       const prompt = `Extract the ${maxTopics} most important topics from the following text. Return only the topics as a comma-separated list, no explanations:
 
 ${text}`;
 
-      const response = await this.grokClient.generateText(prompt, {
+      const response = await this.claudeClient.generateText(prompt, {
         maxTokens: 100,
         temperature: 0.3
       });
@@ -508,7 +509,7 @@ ${text}`;
         enhancedPrompt = `${prompt}\n\nContext: ${JSON.stringify(context, null, 2)}`;
       }
 
-      const response = await this.grokClient.generateText(enhancedPrompt, {
+      const response = await this.claudeClient.generateText(enhancedPrompt, {
         maxTokens: Math.min(maxLength * 2, 500), // Rough token estimation
         temperature: 0.5
       });

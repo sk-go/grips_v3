@@ -10,6 +10,7 @@ import {
   SalesforceCrmConfig, 
   HubSpotCrmConfig, 
   AgencyBlocCrmConfig,
+  ProfessionalWorksCrmConfig,
   CrmError 
 } from './types';
 import { CrmSystem } from '../../types';
@@ -17,6 +18,7 @@ import { ZohoCrmConnector } from './connectors/zohoCrmConnector';
 import { SalesforceCrmConnector } from './connectors/salesforceCrmConnector';
 import { HubSpotCrmConnector } from './connectors/hubspotCrmConnector';
 import { AgencyBlocCrmConnector } from './connectors/agencyBlocCrmConnector';
+import { ProfessionalWorksCrmConnector } from './connectors/professionalWorksCrmConnector';
 import { logger } from '../../utils/logger';
 
 export class CrmConnectorFactory {
@@ -50,6 +52,10 @@ export class CrmConnectorFactory {
       
       case 'agencybloc':
         connector = new AgencyBlocCrmConnector(config as AgencyBlocCrmConfig);
+        break;
+      
+      case 'professional-works':
+        connector = new ProfessionalWorksCrmConnector(config as ProfessionalWorksCrmConfig);
         break;
       
       default:
@@ -134,7 +140,14 @@ export class CrmConnectorFactory {
         baseUrl: 'https://api.agencybloc.com',
         scopes: ['contacts:read', 'contacts:write'],
         apiVersion: 'v1'
-      } as Partial<AgencyBlocCrmConfig>
+      } as Partial<AgencyBlocCrmConfig>,
+
+      'professional-works': {
+        system: 'professional-works',
+        baseUrl: 'https://api.professional.works/api/v1',
+        scopes: ['contacts:read', 'contacts:write', 'accounts:read'],
+        apiVersion: 'v1'
+      } as Partial<ProfessionalWorksCrmConfig>
     };
   }
 
@@ -180,6 +193,18 @@ export class CrmConnectorFactory {
         const abConfig = config as AgencyBlocCrmConfig;
         if (!abConfig.environment) {
           logger.error('AgencyBloc CRM config missing environment', { system: config.system });
+          return false;
+        }
+        break;
+
+      case 'professional-works':
+        const pwConfig = config as ProfessionalWorksCrmConfig;
+        if (!pwConfig.planTier) {
+          logger.error('Professional Works CRM config missing planTier', { system: config.system });
+          return false;
+        }
+        if (!pwConfig.environment) {
+          logger.error('Professional Works CRM config missing environment', { system: config.system });
           return false;
         }
         break;

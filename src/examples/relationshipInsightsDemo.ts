@@ -147,7 +147,8 @@ export class RelationshipInsightsDemo {
 
     try {
       const clientId = 'client-123';
-      const summary = await this.service.generateConversationSummary(clientId, mockCommunications);
+      const communicationIds = mockCommunications.map(comm => comm.id);
+      const summary = await this.service.generateConversationSummary(clientId, communicationIds);
 
       console.log(`Client ID: ${clientId}`);
       console.log(`Summary: ${summary.summary}`);
@@ -169,17 +170,14 @@ export class RelationshipInsightsDemo {
 
     try {
       const clientId = 'client-123';
-      const trendData = await this.service.getSentimentTrend(clientId, '30d');
+      const trendData = await this.service.getSentimentTrend(clientId, 30);
 
       console.log(`Client ID: ${clientId}`);
-      console.log(`Timeframe: ${trendData.timeframe}`);
-      console.log(`Overall Trend: ${trendData.overallTrend}`);
-      console.log(`Trend Strength: ${trendData.trendStrength.toFixed(3)}`);
-      console.log(`Data Points: ${trendData.dataPoints.length}`);
+      console.log(`Data Points: ${trendData.length}`);
 
       // Display data points
       console.log('\nDaily Sentiment Data:');
-      trendData.dataPoints.forEach(point => {
+      trendData.forEach(point => {
         console.log(`  ${point.date.toDateString()}: ${point.sentimentScore.toFixed(3)} (${point.communicationCount} comms, ${point.averageResponseTime.toFixed(1)}h avg response)`);
       });
 
@@ -187,11 +185,11 @@ export class RelationshipInsightsDemo {
       console.log('\n--- Chart Generation ---');
       
       // SVG Chart
-      const svgChart = this.chart.generateSVGChart(trendData.dataPoints);
+      const svgChart = this.chart.generateSVGChart(trendData);
       console.log(`SVG Chart generated (${svgChart.length} characters)`);
       
       // Chart.js Config
-      const chartJSConfig = this.chart.generateChartJSConfig(trendData.dataPoints);
+      const chartJSConfig = this.chart.generateChartJSConfig(trendData);
       console.log('Chart.js configuration generated:');
       console.log(`  Type: ${chartJSConfig.type}`);
       console.log(`  Datasets: ${chartJSConfig.data.datasets.length}`);

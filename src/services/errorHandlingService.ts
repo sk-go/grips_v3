@@ -85,7 +85,7 @@ export class ErrorHandlingService {
   /**
    * Sanitizes error messages to prevent information disclosure
    */
-  static sanitizeAuthError(error: Error, context: 'login' | 'register' | 'password_reset' | 'token_refresh'): string {
+  static sanitizeAuthError(error: Error, context: 'login' | 'register' | 'password_reset' | 'token_refresh' | 'email_verification'): string {
     const message = error.message.toLowerCase();
 
     switch (context) {
@@ -152,7 +152,10 @@ export class ErrorHandlingService {
    * Logs security events with appropriate detail level
    */
   static logSecurityEvent(
-    event: 'login_attempt' | 'login_success' | 'login_failure' | 'rate_limit_exceeded' | 'password_change' | 'token_refresh',
+    event: 'login_attempt' | 'login_success' | 'login_failure' | 'rate_limit_exceeded' | 'password_change' | 'token_refresh' | 
+           'registration_success' | 'registration_failure' | 'email_verification_success' | 'email_verification_failed' | 
+           'verification_resend_success' | 'registration_approved' | 'registration_rejected' | 'captcha_verification_failed' | 
+           'captcha_verification_success',
     details: {
       userId?: string;
       email?: string;

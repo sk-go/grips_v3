@@ -1,9 +1,11 @@
+export { ClaudeApiClient } from './claudeApiClient';
 export { GrokApiClient } from './grokApiClient';
 export { TaskExtractionService } from './taskExtractionService';
 export { ContextAggregationService } from './contextAggregationService';
 export { VectorSearchService } from './vectorSearchService';
 export { NLPProcessingService } from './nlpProcessingService';
 
+import { ClaudeApiClient } from './claudeApiClient';
 import { GrokApiClient } from './grokApiClient';
 import { TaskExtractionService } from './taskExtractionService';
 import { ContextAggregationService } from './contextAggregationService';
@@ -13,19 +15,26 @@ import { CacheService } from '../cacheService';
 import { NLPConfig } from '../../types/nlp';
 
 export class NLPService {
-  private grokClient: GrokApiClient;
+  private claudeClient: ClaudeApiClient;
+  private grokClient: GrokApiClient | null;
   private taskExtractor: TaskExtractionService;
   private contextAggregator: ContextAggregationService;
   private vectorSearch: VectorSearchService;
   private nlpProcessor: NLPProcessingService;
 
   constructor(cacheService: CacheService, config: NLPConfig) {
-    this.grokClient = new GrokApiClient(config.grok.apiKey, config.grok.baseUrl);
+    this.claudeClient = new ClaudeApiClient(config.claude.apiKey, config.claude.model);
+    
+    // Keep Grok client for backward compatibility during transition
+    this.grokClient = config.grok?.apiKey ? 
+      new GrokApiClient(config.grok.apiKey, config.grok.baseUrl) : 
+      null;
+    
     this.taskExtractor = new TaskExtractionService();
     this.contextAggregator = new ContextAggregationService(cacheService);
     this.vectorSearch = new VectorSearchService(cacheService, config.vectorSearch.dimensions);
     this.nlpProcessor = new NLPProcessingService(
-      this.grokClient,
+      this.claudeClient,
       this.taskExtractor,
       this.contextAggregator,
       this.vectorSearch,
@@ -33,7 +42,11 @@ export class NLPService {
     );
   }
 
-  public getGrokClient(): GrokApiClient {
+  public getClaudeClient(): ClaudeApiClient {
+    return this.claudeClient;
+  }
+
+  public getGrokClient(): GrokApiClient | null {
     return this.grokClient;
   }
 

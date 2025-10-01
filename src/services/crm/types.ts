@@ -221,6 +221,47 @@ export interface AgencyBlocContact {
   [key: string]: any;
 }
 
+// Professional Works specific types
+export interface ProfessionalWorksCrmConfig extends CrmConfig {
+  system: 'professional-works';
+  planTier: 'professional' | 'enterprise';
+  environment: 'production' | 'sandbox';
+}
+
+export interface ProfessionalWorksContact {
+  id: string;
+  Full_Name: string;
+  Email: string;
+  Phone: string;
+  Account_Name?: string;
+  Address?: string;
+  City?: string;
+  State?: string;
+  Postal_Code?: string;
+  Country?: string;
+  Created_Time: string;
+  Modified_Time: string;
+  Last_Activity_Time?: string;
+  [key: string]: any;
+}
+
+export interface ProfessionalWorksAccount {
+  id: string;
+  Account_Name: string;
+  Account_Type?: string;
+  Industry?: string;
+  Phone?: string;
+  Website?: string;
+  Billing_Street?: string;
+  Billing_City?: string;
+  Billing_State?: string;
+  Billing_Code?: string;
+  Billing_Country?: string;
+  Created_Time: string;
+  Modified_Time: string;
+  [key: string]: any;
+}
+
 // ============================================================================
 // Error Types
 // ============================================================================

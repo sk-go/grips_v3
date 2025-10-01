@@ -155,7 +155,7 @@ async function createBackup(): Promise<string | null> {
         }
       });
 
-      pgDump.on('close', (code) => {
+      pgDump.on('close', (code: number) => {
         if (code === 0) {
           logger.info('Backup created successfully', { backupFile });
           resolve(backupFile);
@@ -165,7 +165,7 @@ async function createBackup(): Promise<string | null> {
         }
       });
 
-      pgDump.on('error', (error) => {
+      pgDump.on('error', (error: Error) => {
         logger.error('Backup process error', { error: error.message });
         reject(error);
       });

@@ -16,6 +16,7 @@ declare global {
         firstName?: string;
         lastName?: string;
         isActive?: boolean;
+        emailVerified?: boolean;
         authMethod?: 'local'; // Only local auth is supported now
       };
     }
@@ -106,6 +107,7 @@ export const authenticateToken = async (
           firstName: user.first_name,
           lastName: user.last_name,
           isActive: user.is_active,
+          emailVerified: user.email_verified,
           authMethod
         };
 
@@ -232,6 +234,7 @@ export const optionalAuth = async (
                 firstName: user.first_name,
                 lastName: user.last_name,
                 isActive: user.is_active,
+                emailVerified: user.email_verified,
                 authMethod
               };
 
@@ -298,6 +301,7 @@ export const refreshTokenMiddleware = async (
         firstName: tokens.user.firstName,
         lastName: tokens.user.lastName,
         isActive: tokens.user.isActive,
+        emailVerified: tokens.user.emailVerified,
         authMethod: 'local'
       };
 
@@ -394,12 +398,96 @@ export const validateTokenStructure = (
 };
 
 /**
+ * Middleware to require email verification
+ * This middleware checks if the authenticated user has verified their email
+ */
+export const requireEmailVerification = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  if (!req.user) {
+    res.status(401).json({ 
+      error: 'Authentication required',
+      code: 'AUTH_REQUIRED'
+    });
+    return;
+  }
+
+  if (!req.user.emailVerified) {
+    logger.warn('Access denied - email not verified', {
+      userId: req.user.id,
+      email: req.user.email,
+      path: req.path,
+      ip: req.ip
+    });
+    
+    res.status(403).json({ 
+      error: 'Email verification required. Please check your email and verify your account.',
+      code: 'EMAIL_VERIFICATION_REQUIRED',
+      requiresVerification: true,
+      email: req.user.email
+    });
+    return;
+  }
+
+  logger.debug('Email verification check passed', {
+    userId: req.user.id,
+    email: req.user.email,
+    path: req.path
+  });
+
+  next();
+};
+
+/**
+ * Middleware that gracefully handles unverified users
+ * This middleware allows access but adds a flag indicating verification status
+ */
+export const checkEmailVerification = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  if (req.user && !req.user.emailVerified) {
+    logger.debug('User accessing with unverified email', {
+      userId: req.user.id,
+      email: req.user.email,
+      path: req.path
+    });
+    
+    // Add verification status to response headers for client awareness
+    res.setHeader('X-Email-Verification-Required', 'true');
+  }
+
+  next();
+};
+
+/**
  * Combined authentication middleware that includes token structure validation and refresh
  */
 export const authenticateWithRefresh = [
   validateTokenStructure,
   refreshTokenMiddleware,
   authenticateToken
+];
+
+/**
+ * Combined authentication middleware that requires email verification
+ */
+export const authenticateWithEmailVerification = [
+  authenticateToken,
+  requireEmailVerification
+];
+
+/**
+ * Combined authentication middleware with refresh and email verification
+ */
+export const authenticateWithRefreshAndEmailVerification = [
+  validateTokenStructure,
+  refreshTokenMiddleware,
+  authenticateToken,
+  requireEmailVerification
 ];
 
 // Alias for backward compatibility

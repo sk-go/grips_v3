@@ -99,6 +99,46 @@ export interface GrokAPIResponse {
   };
 }
 
+export interface ClaudeAPIRequest {
+  messages: Array<{
+    role: 'system' | 'user' | 'assistant';
+    content: string;
+  }>;
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+  stream?: boolean;
+}
+
+export interface ClaudeAPIResponse {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    message: {
+      role: string;
+      content: string;
+    };
+    finish_reason: string;
+  }>;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+  cost: number;
+  processing_time: number;
+}
+
+export interface ClaudeUsageStats {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalCost: number;
+}
+
 export interface LanguageModel {
   code: string;
   name: string;
@@ -121,6 +161,13 @@ export interface SemanticSearchRequest {
 }
 
 export interface NLPConfig {
+  claude: {
+    apiKey: string;
+    model: string;
+    temperature: number;
+    maxTokens: number;
+    costThreshold: number;
+  };
   grok: {
     apiKey: string;
     baseUrl: string;

@@ -19,6 +19,25 @@ services:
       timeout: 10s
       retries: 3
 
+  # RabbitMQ for message queuing and inter-service communication
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: rcp-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: password
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "5672:5672"    # AMQP port
+      - "15672:15672"  # Management UI port
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # PostgreSQL for local testing only (optional)
   # Primary database operations use Supabase cloud database
   postgres:
@@ -44,3 +63,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  rabbitmq_data:
